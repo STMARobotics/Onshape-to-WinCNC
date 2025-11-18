@@ -174,81 +174,6 @@ def process_arc_line(line: str, last_g: str):
     return line, last_g
 
 
-def translate_tool_change_command(tool_number: Optional[str]) -> str:
-    """Map M6 requests to the ShopSabre-specific TC command."""
-
-    base = SETTINGS.tool_change_command
-    if tool_number:
-        return f"{base},{tool_number}"
-    return f"{base} [Tool change requested without explicit T-word]"
-
-
-def translate_coolant_code(code: str) -> list[str]:
-    """Map generic coolant M-codes to WinCNC SO outputs."""
-
-    upper = code.upper()
-    lines: list[str] = []
-
-    def _append(channel: Optional[int], state: int) -> None:
-        if channel is None:
-            return
-        lines.append(f"SO,{channel},{state}")
-
-    if upper == 'M7':
-        _append(SETTINGS.mist_output, 1)
-    elif upper == 'M8':
-        _append(SETTINGS.flood_output, 1)
-    elif upper == 'M9':
-        _append(SETTINGS.mist_output, 0)
-        _append(SETTINGS.flood_output, 0)
-    return lines
-
-
-def preprocess_tokens_for_machine_specific(
-    tokens: list[str],
-    last_tool: Optional[str],
-    remove_coolant: bool,
-    remove_toolchange: bool,
-):
-    """Extract ShopSabre-specific commands before generic token filtering."""
-
-    tool_in_line = None
-    for tok in tokens:
-        up = tok.upper()
-        if up.startswith('T') and up[1:].replace('.', '').isdigit():
-            tool_in_line = tok[1:]
-    if tool_in_line:
-        last_tool = tool_in_line
-
-    pre_lines: list[str] = []
-    post_lines: list[str] = []
-    remaining: list[str] = []
-    seen_general = False
-
-    def _target_lines() -> list[str]:
-        return post_lines if seen_general else pre_lines
-
-    for tok in tokens:
-        up = tok.upper()
-        if up.startswith('T') and up[1:].replace('.', '').isdigit():
-            continue
-        if up == 'M6' and not remove_toolchange:
-            line = translate_tool_change_command(last_tool)
-            _target_lines().append(line)
-            continue
-        if up in ('M7', 'M8', 'M9') and not remove_coolant:
-            translated = translate_coolant_code(up)
-            _target_lines().extend(translated)
-            continue
-        if tok:
-            # Treat any remaining token as a general token; whitespace has been stripped upstream.
-            if up:
-                seen_general = True
-            remaining.append(tok)
-
-    return remaining, pre_lines, post_lines, last_tool
-
-
 def remove_unsupported_tokens(tokens, remove_coolant: bool, remove_toolchange: bool):
     """Filter out tokens that WinCNC does not support or should be handled separately.
 
@@ -334,7 +259,6 @@ def convert_lines(lines, remove_coolant: bool = True, remove_toolchange: bool = 
     """
     converted = []
     last_motion = None
-    last_tool = None
     for original_line in lines:
         line = original_line.rstrip('\n')
         line = remove_semicolon_comments(line)
@@ -344,18 +268,8 @@ def convert_lines(lines, remove_coolant: bool = True, remove_toolchange: bool = 
             continue
         for sm_line in split_spindle_speed_and_m(line.strip()):
             tokens = sm_line.split()
-            tokens, pre_lines, post_lines, last_tool = preprocess_tokens_for_machine_specific(
-                tokens,
-                last_tool,
-                remove_coolant,
-                remove_toolchange,
-            )
-            for pre in pre_lines:
-                converted.append(pre)
             tokens = remove_unsupported_tokens(tokens, remove_coolant, remove_toolchange)
             if not tokens:
-                if post_lines:
-                    converted.extend(post_lines)
                 continue
             grouped = split_by_multiple_commands(tokens)
             for group in grouped:
@@ -380,8 +294,6 @@ def convert_lines(lines, remove_coolant: bool = True, remove_toolchange: bool = 
                         elif last_motion in ('G0', 'G1') and has_lin:
                             group.insert(0, last_motion)
                 converted.append(' '.join(group))
-            if post_lines:
-                converted.extend(post_lines)
     # After processing all lines, perform post-processing on the converted list.
     # 1. Handle placement of G49 (tool length cancel) commands:
     #    - If there is a spindle stop (M5), remove any G49 before the first M5
