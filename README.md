@@ -1,11 +1,19 @@
 # Onshape-to-WinCNC
-
-A simple python script to convert Onshape CAM Studio .nc files to be compatible with ShopSabre WinCNC.
-Brought to you by FRC 7028 Binary Battlion.
 ---
+A simple python script to convert Onshape CAM Studio .nc files to be compatible with ShopSabre WinCNC.
+
+Brought to you by FRC 7028 Binary Battlion.
+
 WARNING: Use at your own risk. Always simulate before executing toolpaths.
 
 Python is required to run the program- you can install it via the microsoft store.
+
+---
+
+# What does the script do?
+This script takes G-code exported from Onshape CAM Studio and rewrites it into a format that ShopSabre’s WinCNC controller can safely and reliably run. WinCNC is far more strict than generic Fanuc-style posts, so the script cleans and restructures the file: it removes unsupported tokens (program numbers, comments, redundant modal codes), splits combined commands (like S and M3), forces WinCNC-safe arc formatting, normalizes motion commands, and ensures the correct placement of things like tool-length cancel (G49). It also includes optional removal of coolant and tool-change commands via GUI checkboxes. Before converting, the script analyzes Z-values after spindle start to detect if Onshape’s Setup → Position Type was incorrectly set—blocking conversion with a red error dialog if the toolpath would cut entirely above the stock. The result is a clean .tap file prefixed with SS23_, ready to run on a ShopSabre 23 without syntax errors, unexpected behavior, or manual editing.
+
+---
 
 # Preparation
 
