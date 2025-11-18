@@ -1,0 +1,484 @@
+"""
+GUI Application for Converting Onshape CAM Studio G-code to WinCNC Format
+=======================================================================
+
+This module provides a simple graphical user interface (GUI) that allows
+operators to select a G-code file exported from Onshape CAM Studio and
+convert it to a WinCNC-compatible format for ShopSabre routers.  The
+interface guides the user through selecting the input file, displays the
+derived output file name (prefixed with ``SS_``), and provides feedback
+during the conversion process.  A confirmation dialog alerts the user
+when the conversion succeeds or if an error occurs.
+
+The conversion logic is based on the ``onshape_to_wincnc.py`` script
+developed earlier.  It performs the following transformations:
+
+* Removes parentheses and semicolon comments because WinCNC uses
+  square brackets for comments.
+* Splits spindle speed (``S``) and spindle start/stop commands
+  (``M3``/``M4``/``M5``) onto separate lines.
+* Inserts the last arc command (``G2``/``G3``) on subsequent lines
+  containing arc parameters because arcs are not modal in WinCNC.
+* Optionally removes tool changes (``M6``) for machines without
+  automatic tool changers.
+* Optionally removes coolant codes (``M7``, ``M8``, ``M9``) if they are
+  not relevant for the machine.
+"""
+
+import os
+import re
+import tkinter as tk
+from tkinter import filedialog, messagebox
+
+
+# -----------------------------------------------------------------------------
+#  Improved conversion routines
+#
+
+def remove_parentheses_comments(line: str) -> str:
+    """Strip any text enclosed in parentheses from the line."""
+    while '(' in line and ')' in line and line.index('(') < line.index(')'):
+        start = line.index('(')
+        end = line.index(')', start) + 1
+        line = line[:start] + line[end:]
+    return line
+
+
+def remove_semicolon_comments(line: str) -> str:
+    """Remove everything after a semicolon comment."""
+    if ';' in line:
+        return line.split(';', 1)[0]
+    return line
+
+
+def split_spindle_speed_and_m(line: str):
+    """Split S-word from M3/M4/M5 if they appear together in one block."""
+    tokens = line.strip().split()
+    s_index = None
+    m_index = None
+    for i, token in enumerate(tokens):
+        if token.upper().startswith('S') and token[1:].replace('.', '').isdigit():
+            s_index = i
+        if token.upper() in ('M3', 'M4', 'M5'):
+            m_index = i
+    if s_index is not None and m_index is not None and m_index > s_index:
+        return [' '.join(tokens[:m_index]), ' '.join(tokens[m_index:])]
+    return [line]
+
+
+def process_arc_line(line: str, last_g: str):
+    """Maintain non-modal behaviour for G2/G3.
+
+    If a line contains no G-code but has arc centre parameters (I/J/K/R)
+    following a G2/G3, prefix the previous G-code.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return line, last_g
+    tokens = stripped.split()
+    gcode_pattern = re.compile(r'G0?\d+(\.\d+)?', re.IGNORECASE)
+    g_found = None
+    for t in tokens:
+        if gcode_pattern.match(t):
+            g_found = t.upper()
+            break
+    if g_found:
+        last_g = g_found
+        return line, last_g
+    # If the last G was G2/G3 and arc params present, prefix it
+    if last_g in ('G2', 'G02', 'G3', 'G03'):
+        if any(tok[0].upper() in ('I', 'J', 'K', 'R') for tok in tokens):
+            # Sequence numbers (N words) are removed in the improved converter,
+            # so we can simply prefix without worrying about them.
+            return f"{last_g} {line.lstrip()}", last_g
+    return line, last_g
+
+
+def remove_unsupported_tokens(tokens, remove_coolant: bool, remove_toolchange: bool):
+    """Filter out tokens that WinCNC does not support or should be handled separately.
+
+    Removes program delimiters (%, O#####), line numbers (N####), tool
+    selection (T#), tool length offsets (H#). Optionally removes coolant
+    codes (M7/M8/M9) and tool change commands (M6). Omits plane
+    selection, cutter compensation and canned cycle cancel codes
+    (G17, G40, G80). G49 (tool length cancel) is retained and handled
+    in a post-processing step.
+    """
+    result = []
+    for tok in tokens:
+        up = tok.upper()
+        # Skip program delimiters and program numbers
+        if up.startswith('%'):
+            continue
+        if up.startswith('O') and up[1:].isdigit():
+            continue
+        # Remove line numbers
+        if up.startswith('N') and up[1:].isdigit():
+            continue
+        # Remove tool selection and length offset words
+        if up.startswith('T') and up[1:].replace('.', '').isdigit():
+            continue
+        if up.startswith('H') and up[1:].replace('.', '').isdigit():
+            continue
+        # Optionally remove coolant commands
+        if remove_coolant and up in ('M7', 'M8', 'M9'):
+            continue
+        # Optionally remove tool change commands
+        if remove_toolchange and up == 'M6':
+            continue
+        # Omit plane selection and cutter compensation codes; these can
+        # cause syntax or multiple command errors if combined with other G-codes.
+        if up in ('G17', 'G40', 'G80'):
+            continue
+        result.append(tok)
+    return result
+
+
+def split_by_multiple_commands(tokens):
+    """Divide tokens into groups with at most one G or M command."""
+    lines = []
+    current = []
+    has_command = False
+    for tok in tokens:
+        if not tok:
+            continue
+        up = tok.upper()
+        is_command = up.startswith('G') or up.startswith('M')
+        if is_command:
+            if has_command and current:
+                lines.append(current)
+                current = []
+                has_command = False
+            current.append(tok)
+            has_command = True
+        else:
+            current.append(tok)
+    if current:
+        lines.append(current)
+    return lines
+
+
+def get_g_code(token: str):
+    m = re.match(r'^G\d+(\.\d+)?', token, re.IGNORECASE)
+    if m:
+        return m.group(0).upper()
+    return None
+
+
+def convert_lines(lines, remove_coolant: bool = True, remove_toolchange: bool = True):
+    """Convert a list of G-code lines into WinCNC-friendly format.
+
+    Parameters
+    ----------
+    lines : list[str]
+        Raw G-code lines.
+    remove_coolant : bool
+        If True, remove M7/M8/M9 commands.
+    remove_toolchange : bool
+        If True, remove M6 commands.
+    """
+    converted = []
+    last_motion = None
+    for original_line in lines:
+        line = original_line.rstrip('\n')
+        line = remove_semicolon_comments(line)
+        line = remove_parentheses_comments(line)
+        if not line.strip():
+            converted.append('')
+            continue
+        for sm_line in split_spindle_speed_and_m(line.strip()):
+            tokens = sm_line.split()
+            tokens = remove_unsupported_tokens(tokens, remove_coolant, remove_toolchange)
+            if not tokens:
+                continue
+            grouped = split_by_multiple_commands(tokens)
+            for group in grouped:
+                if not group:
+                    continue
+                g_code_in_line = None
+                for tok in group:
+                    g_code_in_line = get_g_code(tok)
+                    if g_code_in_line:
+                        break
+                if g_code_in_line:
+                    m = re.match(r'^G0?([0123])', g_code_in_line)
+                    if m:
+                        last_motion = f"G{m.group(1)}"
+                else:
+                    # If no G-code in this group, prefix last motion on coordinate lines
+                    if last_motion:
+                        has_arc = any(tok[0].upper() in ('I', 'J', 'K', 'R') for tok in group)
+                        has_lin = any(tok[0].upper() in ('X', 'Y', 'Z', 'W') for tok in group)
+                        if last_motion in ('G2', 'G3') and has_arc:
+                            group.insert(0, last_motion)
+                        elif last_motion in ('G0', 'G1') and has_lin:
+                            group.insert(0, last_motion)
+                converted.append(' '.join(group))
+    # After processing all lines, perform post-processing on the converted list.
+    # 1. Handle placement of G49 (tool length cancel) commands:
+    #    - If there is a spindle stop (M5), remove any G49 before the first M5
+    #      and keep those that follow.
+    #    - If there is no M5, keep only the last G49 and drop earlier occurrences.
+    m5_index = None
+    for idx, ln in enumerate(converted):
+        if ln.strip().upper().startswith('M5'):
+            m5_index = idx
+            break
+    final_lines = []
+    if m5_index is None:
+        # Retain only the last G49
+        g49_indices = [i for i, ln in enumerate(converted) if ln.strip().upper().startswith('G49')]
+        remove_set = set(g49_indices[:-1])
+        for i, ln in enumerate(converted):
+            if i in remove_set and ln.strip().upper().startswith('G49'):
+                continue
+            final_lines.append(ln)
+    else:
+        seen_m5 = False
+        for ln in converted:
+            stripped = ln.strip().upper()
+            if stripped.startswith('M5'):
+                seen_m5 = True
+                final_lines.append(ln)
+                continue
+            if stripped.startswith('G49'):
+                if not seen_m5:
+                    continue
+                else:
+                    final_lines.append(ln)
+                    continue
+            final_lines.append(ln)
+    # 2. Ensure there are two blank lines following the first G90 near the top
+    for idx, line in enumerate(final_lines):
+        if line.strip().upper() == 'G90':
+            blank_count = 0
+            j = idx + 1
+            while j < len(final_lines) and final_lines[j].strip() == '':
+                blank_count += 1
+                j += 1
+            while blank_count < 2:
+                final_lines.insert(idx + 1, '')
+                blank_count += 1
+            break
+    return final_lines
+
+
+def detect_z_zero_issue(lines):
+    """Detect whether the CAM output appears to have an incorrect Z-zero.
+
+    After the spindle turns on (M3 or M4), inspect all motion commands (G0/G1/G2/G3)
+    for Z coordinates.  If there are no negative Z values and the range of Z
+    heights is small, it's likely that the program is cutting above the stock
+    because the CAM setup used the wrong reference (world origin instead of
+    stock).  The heuristic implemented here is simple: if there is no
+    occurrence of "Z-" in any line after the first M3/M4, warn the user.
+
+    Args:
+        lines: List of strings representing the input G-code file.
+
+    Returns:
+        True if a potential Z-zero problem is detected, False otherwise.
+    """
+    spindle_on = False
+    for line in lines:
+        uline = line.upper()
+        # Detect spindle on commands
+        if not spindle_on and ('M3' in uline or 'M4' in uline):
+            spindle_on = True
+            continue
+        if not spindle_on:
+            continue
+        # After spindle on, look for negative Z values
+        if 'Z-' in uline.replace(' ', ''):
+            # Found a negative Z; assume proper cutting depth
+            return False
+    # If we reach here and never found 'Z-' after spindle on, flag warning
+    return True
+
+
+def convert_file(
+    input_path: str,
+    output_path: str,
+    remove_coolant: bool = True,
+    remove_toolchange: bool = True
+) -> None:
+    """Convert the input G-code file and write to the given output path.
+
+    Parameters
+    ----------
+    input_path : str
+        Input G-code file path.
+    output_path : str
+        Output G-code file path.
+    remove_coolant : bool
+        If True, remove M7/M8/M9 commands.
+    remove_toolchange : bool
+        If True, remove M6 commands.
+
+    Raises
+    ------
+    IOError
+        On file errors.
+    """
+    with open(input_path, 'r', encoding='utf-8', errors='ignore') as f_in:
+        lines = f_in.readlines()
+    converted = convert_lines(lines, remove_coolant=remove_coolant, remove_toolchange=remove_toolchange)
+    with open(output_path, 'w', encoding='utf-8') as f_out:
+        for cl in converted:
+            f_out.write(cl.rstrip() + '\n')
+
+
+class ConverterGUI:
+    """Graphical interface for Onshape to WinCNC conversion."""
+
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.root.title('Onshape to WinCNC Converter')
+
+        # Top instructions label
+        instructions = (
+            "This program converts Onshape CAM Studio g-code to Shop Sabre WinCNC compatible g-code.\n"
+            "To prepare your file for this operation, post from Onshape with these settings:\n"
+            "  • Machine = 3-Axis Generic Milling - Fanuc\n"
+            "  • Fixed Cycles = All options turned OFF\n"
+            "  • Setup -> Position Type = Stock box point"
+        )
+        self.info_label = tk.Label(
+            root,
+            text=instructions,
+            justify='left',
+            anchor='w',
+            wraplength=600
+        )
+        self.info_label.grid(row=0, column=0, columnspan=3, sticky='w', padx=5, pady=(5, 10))
+
+        # Input file selection
+        self.input_label = tk.Label(root, text='Input G-code file:')
+        self.input_label.grid(row=1, column=0, sticky='w', padx=5, pady=5)
+        self.input_entry = tk.Entry(root, width=50)
+        self.input_entry.grid(row=1, column=1, padx=5, pady=5)
+        self.input_button = tk.Button(root, text='Browse...', command=self.select_input)
+        self.input_button.grid(row=1, column=2, padx=5, pady=5)
+
+        # Output file display (auto-generated)
+        self.output_label = tk.Label(root, text='Output file:')
+        self.output_label.grid(row=2, column=0, sticky='w', padx=5, pady=5)
+        self.output_entry = tk.Entry(root, width=50)
+        self.output_entry.grid(row=2, column=1, padx=5, pady=5)
+        self.output_entry.configure(state='readonly')
+
+        # Options: remove coolant and tool change commands
+        self.remove_coolant_var = tk.BooleanVar(value=True)
+        self.remove_toolchange_var = tk.BooleanVar(value=True)
+
+        self.remove_coolant_check = tk.Checkbutton(
+            root,
+            text='Remove coolant commands (M7/M8/M9)',
+            variable=self.remove_coolant_var
+        )
+        self.remove_coolant_check.grid(row=3, column=0, columnspan=3, sticky='w', padx=5, pady=(5, 0))
+
+        self.remove_toolchange_check = tk.Checkbutton(
+            root,
+            text='Remove tool change commands (M6)',
+            variable=self.remove_toolchange_var
+        )
+        self.remove_toolchange_check.grid(row=4, column=0, columnspan=3, sticky='w', padx=5, pady=(0, 5))
+
+        # Convert button
+        self.convert_button = tk.Button(root, text='Convert', command=self.convert)
+        self.convert_button.grid(row=5, column=1, pady=10)
+
+        # Status message
+        self.status_var = tk.StringVar()
+        self.status_var.set('Select a file to convert.')
+        self.status_label = tk.Label(root, textvariable=self.status_var, fg='blue')
+        self.status_label.grid(row=6, column=0, columnspan=3, padx=5, pady=5)
+
+    def select_input(self) -> None:
+        """Handle the file selection dialog for the input file."""
+        path = filedialog.askopenfilename(
+            title='Select Onshape G-code file',
+            filetypes=[
+                ('G-code Files', '*.nc *.tap *.gcode *.txt'),
+                ('All Files', '*.*')
+            ]
+        )
+        if not path:
+            return
+        self.input_entry.delete(0, tk.END)
+        self.input_entry.insert(0, path)
+        # Derive output file name: prefix with SS_ and ensure .tap extension
+        base_name = os.path.basename(path)
+        name_root, ext = os.path.splitext(base_name)
+        if not ext:
+            ext = '.tap'
+        else:
+            ext = '.tap'  # unify extension for WinCNC
+        out_name = f"SS_{name_root}{ext}"
+        out_path = os.path.join(os.path.dirname(path), out_name)
+        self.output_entry.configure(state='normal')
+        self.output_entry.delete(0, tk.END)
+        self.output_entry.insert(0, out_path)
+        self.output_entry.configure(state='readonly')
+        self.status_var.set('Ready to convert.')
+
+    def convert(self) -> None:
+        """Perform the conversion when the Convert button is clicked."""
+        input_path = self.input_entry.get().strip()
+        output_path = self.output_entry.get().strip()
+        if not input_path:
+            messagebox.showerror('Error', 'No input file selected.')
+            return
+        if not os.path.isfile(input_path):
+            messagebox.showerror('Error', 'Input file does not exist.')
+            return
+        try:
+            self.status_var.set('Checking file...')
+            self.root.update_idletasks()
+
+            # Read the input file for analysis
+            with open(input_path, 'r', encoding='utf-8', errors='ignore') as f_in:
+                in_lines = f_in.readlines()
+
+            # Detect potential SETUP -> POSITION TYPE / Z-zero issues BEFORE conversion.
+            # If detected, show an error (red X + failure sound) and abort.
+            if detect_z_zero_issue(in_lines):
+                self.status_var.set('Conversion aborted due to POSITION TYPE error.')
+                messagebox.showerror(
+                    'POSITION TYPE Error Detected',
+                    (
+                        'Z-zero appears to be incorrect (no cutting below Z0 after spindle on).\n\n'
+                        'Be sure to use:\n'
+                        '  Setup -> Position Type = Stock box point\n'
+                        'in Onshape CAM, then repost your file and try again.'
+                    )
+                )
+                return
+
+            # If no issue detected, perform conversion
+            self.status_var.set('Converting...')
+            self.root.update_idletasks()
+            convert_file(
+                input_path,
+                output_path,
+                remove_coolant=self.remove_coolant_var.get(),
+                remove_toolchange=self.remove_toolchange_var.get()
+            )
+
+            self.status_var.set(f'Conversion complete: {output_path}')
+            messagebox.showinfo('Conversion Complete', f'Converted file saved to:\n{output_path}')
+        except Exception as e:
+            self.status_var.set('Conversion failed.')
+            messagebox.showerror('Error', f'An error occurred during conversion:\n{e}')
+
+
+def main() -> None:
+    root = tk.Tk()
+    ConverterGUI(root)
+    root.resizable(False, False)
+    root.mainloop()
+
+
+if __name__ == '__main__':
+    main()
