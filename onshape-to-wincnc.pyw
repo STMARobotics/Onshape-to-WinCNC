@@ -569,7 +569,6 @@ class ConverterGUI:
             "To prepare your file for this operation, post from Onshape with these settings:\n"
             "  • Machine = 3-Axis Generic Milling - Fanuc\n"
             "  • Fixed Cycles = All options turned OFF\n"
-            "  • Setup -> Position Type = Stock box point"
         )
         info_card = ttk.Frame(self.main_frame, style='Card.TFrame', padding=15)
         info_card.grid(row=0, column=0, sticky='ew')
