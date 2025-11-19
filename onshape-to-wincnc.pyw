@@ -21,8 +21,6 @@ when the conversion succeeds or if an error occurs.
 * Optionally removes mist coolant codes (``M7`` / ``M9``) if they are
   not relevant for the machine, or rewrites them to WinCNC's
   ``M11C<port>`` / ``M12C<port>`` mister control when configured.
-* Checks for likely Z-zero / Position Type mistakes, with behavior
-  dependent on the selected Zero Plane ("Top" or "Bottom").
 """
 
 import json
@@ -434,62 +432,6 @@ def convert_lines(
     return final_lines
 
 
-def detect_z_zero_issue(lines, zero_plane: str = "Top") -> bool:
-    """Detect whether the CAM output appears to have an incorrect Z-zero.
-
-    Behavior depends on the selected zero_plane:
-
-    * "Top": Assumes Z=0 is the top of the stock. After spindle on (M3/M4),
-      we expect at least one negative Z (cutting into the material). If no
-      Z- is ever seen, we assume a likely Position Type / Z-zero mistake.
-
-    * "Bottom": Assumes Z=0 is the bottom of the part. After spindle on
-      we expect Z to stay at or above 0 (Z >= 0). If any negative Z is
-      seen, we flag it as an issue (cutting below the part bottom / table).
-
-    * "Ignore": Disables Z-zero detection entirely.
-
-    Args:
-        lines: List of strings representing the input G-code file.
-        zero_plane: "Top" or "Bottom".
-
-    Returns:
-        True if a potential Z-zero problem is detected, False otherwise.
-    """
-    zero_plane = (zero_plane or "Top").strip().title()
-
-    if zero_plane == "Ignore":
-        return False
-    spindle_on = False
-    saw_negative_z = False
-
-    for line in lines:
-        uline = line.upper()
-        # Detect spindle on commands
-        if not spindle_on and ('M3' in uline or 'M4' in uline):
-            spindle_on = True
-            continue
-        if not spindle_on:
-            continue
-
-        # Normalize away spaces so 'Z -0.050' still matches
-        compact = uline.replace(' ', '')
-        if 'Z-' in compact:
-            saw_negative_z = True
-            # For bottom-zero we can early-out: one negative Z is enough to flag.
-            if zero_plane == "Bottom":
-                return True
-
-    if zero_plane == "Top":
-        # Top-zero heuristic: if we never saw a negative Z after spindle on, warn.
-        if not saw_negative_z:
-            return True
-        return False
-    else:
-        # Bottom-zero heuristic: if we got here, we haven't seen any Z-, so we're OK.
-        return False
-
-
 def convert_file(
     input_path: str,
     output_path: str,
@@ -619,7 +561,6 @@ class ConverterGUI:
 
         self.remove_coolant_var = tk.BooleanVar(value=True)
         self.remove_toolchange_var = tk.BooleanVar(value=True)
-        self.zero_plane_var = tk.StringVar(value="Top")
         self.mist_port_var = tk.StringVar(value='' if self.settings.mist_port is None else str(self.settings.mist_port))
 
         ttk.Label(options_card, text='Mister Port (optional)', style='Card.TLabel').grid(
@@ -661,19 +602,6 @@ class ConverterGUI:
         )
         self.remove_toolchange_check.grid(row=5, column=0, sticky='w', pady=(5, 0))
 
-        """
-        zero_plane_frame = ttk.Frame(options_card, style='Card.TFrame')
-        zero_plane_frame.grid(row=3, column=0, pady=(12, 0), sticky='w')
-        ttk.Label(zero_plane_frame, text='Zero plane', style='Card.TLabel').grid(row=0, column=0, sticky='w')
-        self.zero_plane_menu = ttk.Combobox(
-            zero_plane_frame,
-            textvariable=self.zero_plane_var,
-            values=['Top', 'Bottom', 'Ignore'],
-            state='readonly',
-            width=10
-        )
-        self.zero_plane_menu.grid(row=0, column=1, padx=(10, 0))
-        """
         # Actions and status
         action_frame = ttk.Frame(self.main_frame, style='TFrame', padding=(0, 15, 0, 0))
         action_frame.grid(row=3, column=0, sticky='ew')
@@ -739,7 +667,6 @@ class ConverterGUI:
         """Perform the conversion when the Convert button is clicked."""
         input_path = self.input_entry.get().strip()
         output_path = self.output_entry.get().strip()
-        zero_plane = self.zero_plane_var.get().strip().title() or "Top"
 
         if not input_path:
             messagebox.showerror('Error', 'No input file selected.')
@@ -771,31 +698,6 @@ class ConverterGUI:
                     'Mist commands were detected but no mister port is configured.\n'
                     'Set your mister port in Conversion options before converting.'
                 )
-                return
-
-            # Detect potential SETUP -> POSITION TYPE / Z-zero issues BEFORE conversion.
-            if zero_plane != "Ignore" and detect_z_zero_issue(in_lines, zero_plane=zero_plane):
-                self.status_var.set('Conversion aborted due to Z-zero / POSITION TYPE error.')
-                if zero_plane == "Top":
-                    msg = (
-                        'Z-zero appears to be incorrect for a TOP-of-stock zero.\n'
-                        'No cutting moves go below Z0 after the spindle turns on.\n\n'
-                        'Be sure to use:\n'
-                        '  Setup -> Position Type = Stock box point\n'
-                        'with Z0 at the TOP of the stock in Onshape CAM,\n'
-                        'then repost your file and try again.'
-                    )
-                else:  # Bottom
-                    msg = (
-                        'Z-zero appears to be incorrect for a BOTTOM-of-part zero.\n'
-                        'Cutting moves go below Z0 after the spindle turns on,\n'
-                        'which suggests the zero plane or Position Type is wrong.\n\n'
-                        'Be sure to use:\n'
-                        '  Setup -> Position Type = Stock box point\n'
-                        'with Z0 at the BOTTOM of the part in Onshape CAM,\n'
-                        'then repost your file and try again.'
-                    )
-                messagebox.showerror('Z-Zero / POSITION TYPE Error Detected', msg)
                 return
 
             # If no issue detected, perform conversion
