@@ -558,8 +558,6 @@ class ConverterGUI:
                         background='#2563eb')
         style.map('Accent.TButton', background=[('active', '#1d4ed8')], foreground=[('disabled', '#d1d5db')])
 
-        self._build_menu()
-
         self.main_frame = ttk.Frame(root, padding=20)
         self.main_frame.grid(row=0, column=0, sticky='nsew')
         root.columnconfigure(0, weight=1)
@@ -605,14 +603,26 @@ class ConverterGUI:
         self.output_entry.grid(row=2, column=1, padx=10, pady=(12, 0), sticky='ew')
         self.output_entry.configure(state='readonly')
 
+        ttk.Button(
+            file_card,
+            text='Output Settings…',
+            command=self.open_output_settings_dialog,
+        ).grid(row=3, column=0, columnspan=3, sticky='w', pady=(12, 0))
+
         # Options card
         options_card = ttk.Frame(self.main_frame, style='Card.TFrame', padding=15)
         options_card.grid(row=2, column=0, sticky='ew')
         options_card.columnconfigure(0, weight=1)
+        options_card.columnconfigure(1, weight=0)
 
         ttk.Label(options_card, text='Conversion options', style='Heading.TLabel').grid(
             row=0, column=0, sticky='w', pady=(0, 10)
         )
+        ttk.Button(
+            options_card,
+            text='Machine Settings…',
+            command=self.open_customize_dialog,
+        ).grid(row=0, column=1, sticky='e', pady=(0, 10))
 
         self.remove_coolant_var = tk.BooleanVar(value=True)
         self.remove_toolchange_var = tk.BooleanVar(value=True)
@@ -662,17 +672,6 @@ class ConverterGUI:
         self.status_var.set('Select a file to convert.')
         self.status_label = ttk.Label(action_frame, textvariable=self.status_var, style='Status.TLabel', wraplength=560)
         self.status_label.grid(row=1, column=0, sticky='w')
-
-    def _build_menu(self) -> None:
-        """Create the application menu bar with customization entry."""
-
-        menubar = tk.Menu(self.root)
-        customize_menu = tk.Menu(menubar, tearoff=0)
-        customize_menu.add_command(label='Machine Settings…', command=self.open_customize_dialog)
-        customize_menu.add_command(label='Output Settings…', command=self.open_output_settings_dialog)
-        menubar.add_cascade(label='Customize', menu=customize_menu)
-        self.root.config(menu=menubar)
-        self.menubar = menubar
 
     def select_input(self) -> None:
         """Handle the file selection dialog for the input file."""
