@@ -4,9 +4,9 @@ A simple python script to convert Onshape CAM Studio .nc files to be compatible 
 
 Brought to you by FRC 7028 Binary Battlion.
 
-WARNING: Use at your own risk. Always simulate before executing toolpaths.
-
 Python is required to run the program- you can install it via the microsoft store.
+
+WARNING: Use at your own risk. Always simulate before executing toolpaths.
 
 ---
 
