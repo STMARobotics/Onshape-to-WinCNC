@@ -580,7 +580,7 @@ class ConverterGUI:
         self.mist_port_var = tk.StringVar(value='' if self.settings.mist_port is None else str(self.settings.mist_port))
         self.flood_port_var = tk.StringVar(value='' if self.settings.flood_port is None else str(self.settings.flood_port))
 
-        ttk.Label(options_card, text='Mister Port (optional)', style='Card.TLabel').grid(
+        ttk.Label(options_card, text='Mister Port (leave blank to disable)', style='Card.TLabel').grid(
             row=1, column=0, sticky='w'
         )
 
@@ -598,14 +598,9 @@ class ConverterGUI:
             command=self._save_mist_port_inline,
         ).grid(row=0, column=2, padx=(10, 0))
 
-        ttk.Label(
-            options_card,
-            text='Leave blank to disable mist conversion. Used when keeping M7/M9 commands.',
-            style='Card.TLabel',
-            wraplength=560,
-        ).grid(row=3, column=0, sticky='w', pady=(6, 0))
+        
 
-        ttk.Label(options_card, text='Flood Port (optional)', style='Card.TLabel').grid(
+        ttk.Label(options_card, text='Flood Port (leave blank to disable)', style='Card.TLabel').grid(
             row=4, column=0, sticky='w', pady=(12, 0)
         )
 
@@ -622,13 +617,6 @@ class ConverterGUI:
             text='Save Flood Port',
             command=self._save_flood_port_inline,
         ).grid(row=0, column=2, padx=(10, 0))
-
-        ttk.Label(
-            options_card,
-            text='Leave blank to disable flood conversion for M8 commands.',
-            style='Card.TLabel',
-            wraplength=560,
-        ).grid(row=6, column=0, sticky='w', pady=(6, 0))
 
         self.remove_toolchange_check = ttk.Checkbutton(
             options_card,
