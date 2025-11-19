@@ -566,7 +566,7 @@ class ConverterGUI:
             command=self.open_output_settings_dialog,
         ).grid(row=3, column=0, columnspan=3, sticky='w', pady=(12, 0))
 
-        # Options card
+        # Options area
         options_card = ttk.Frame(self.main_frame, style='Card.TFrame', padding=15)
         options_card.grid(row=2, column=0, sticky='ew')
         options_card.columnconfigure(0, weight=1)
@@ -580,7 +580,7 @@ class ConverterGUI:
         self.mist_port_var = tk.StringVar(value='' if self.settings.mist_port is None else str(self.settings.mist_port))
         self.flood_port_var = tk.StringVar(value='' if self.settings.flood_port is None else str(self.settings.flood_port))
 
-        ttk.Label(options_card, text='Mister Port (leave blank to disable)', style='Card.TLabel').grid(
+        ttk.Label(options_card, text='Mister Port ( to disable)', style='Card.TLabel').grid(
             row=1, column=0, sticky='w'
         )
 
