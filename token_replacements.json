@@ -1,0 +1,35 @@
+{
+  "line_patterns": [
+    {
+      "match": "^[Oo]\\d+.*$",
+      "action": "comment",
+      "prefix": "[",
+      "suffix": "]"
+    },
+    {
+      "match": "^%.*$",
+      "action": "comment",
+      "prefix": "[",
+      "suffix": "]"
+    }
+  ],
+
+  "token_replacements": {
+    "M6": "",
+    "M7": "M11C8 [ ;Coolant On ]",
+    "M8": "M11C8 [ ;Coolant On ]",
+    "M9": "M12C8 [ ;Coolant Off ]",
+    "G17": " [ G17 ;XY Plane Selection ]",
+    "G40": "[ G40 ;Tool Radius Compensation Off ]",
+    "G80": "[ G80 ;Cancel Canned Cycle ]",
+    "G49": "[ G49 ;Tool Length Offset Cancel ]",
+    "H1": "[ H1 ;Tool Length Offset 1 ]",
+    "H2": "[ H2 ;Tool Length Offset 2 ]",
+    "H3": "[ H3 ;Tool Length Offset 3 ]",
+    "H4": "[ H4 ;Tool Length Offset 4 ]",
+    "H5": "[ H5 ;Tool Length Offset 5 ]",
+    "H6": "[ H6 ;Tool Length Offset 6 ]",
+    "T8": "[ T8 ;Tool 8 ]",
+    "N[0-9]+": ""
+  }
+}
