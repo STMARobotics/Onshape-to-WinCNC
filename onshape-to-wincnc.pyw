@@ -48,60 +48,89 @@ _LINE_RULES: List[dict] = []        # Full line processing rules
 _TOKEN_RULES: List[Tuple[Any, str]] = []  # Token rules (regex or str, replacement)
 
 def load_token_replacement_rules():
+    """Load both line-level and token-level rules from token_replacements.json"""
     global _LINE_RULES, _TOKEN_RULES
     _LINE_RULES = []
     _TOKEN_RULES = []
 
     if not TOKEN_REPLACEMENTS_FILE.exists():
-        print(f"Warning: {TOKEN_REPLACEMENTS_FILE} not found.")
+        print(f"Warning: {TOKEN_REPLACEMENTS_FILE} not found. Using minimal defaults.")
+        # Minimal fallback
+        _LINE_RULES = [
+            {"regex": re.compile(r"^[Oo]\d+.*$", re.IGNORECASE), "action": "comment", "prefix": "[", "suffix": "]"},
+            {"regex": re.compile(r"^%.*$", re.IGNORECASE), "action": "comment", "prefix": "[", "suffix": "]"}
+        ]
         return
 
     try:
-        data = json.loads(TOKEN_REPLACEMENTS_FILE.read_text(encoding="utf-8"))
-
-        # Load line_patterns with actions
-        for item in data.get("line_patterns", []):
-            if isinstance(item, str):
-                # Backward compatibility: treat as remove
-                try:
-                    regex = re.compile(item, re.IGNORECASE)
-                    _LINE_RULES.append({"regex": regex, "action": "remove"})
-                except re.error:
-                    print(f"Invalid regex: {item}")
-            elif isinstance(item, dict):
-                match = item.get("match", "").strip()
-                action = item.get("action", "remove").lower()
-                prefix = item.get("prefix", "")
-                suffix = item.get("suffix", "")
-                if not match:
-                    continue
-                try:
-                    regex = re.compile(match, re.IGNORECASE)
-                    _LINE_RULES.append({
-                        "regex": regex,
-                        "action": action,
-                        "prefix": prefix,
-                        "suffix": suffix
-                    })
-                except re.error as e:
-                    print(f"Invalid line_pattern regex '{match}': {e}")
-
-        # Load token replacements (same as before)
-        token_data = data.get("token_replacements", {})
-        for pattern, replacement in token_data.items():
-            repl = "" if replacement is None else str(replacement).strip()
-            if any(c in pattern for c in ".+*^$[]\\"):
-                try:
-                    regex = re.compile(f"^{pattern}$", re.IGNORECASE)
-                    _TOKEN_RULES.append((regex, repl))
-                except re.error:
-                    print(f"Invalid token regex: {pattern}")
-            else:
-                _TOKEN_RULES.append((pattern.upper(), repl))
-
-        print(f"Loaded {_LINE_RULES} line rules, {_TOKEN_RULES} token rules.")
+        raw_data = TOKEN_REPLACEMENTS_FILE.read_text(encoding="utf-8")
+        data = json.loads(raw_data)
     except Exception as e:
-        print(f"Failed to load config: {e}")
+        print(f"Error reading {TOKEN_REPLACEMENTS_FILE}: {e}")
+        return
+
+    # -------------------------------------------------------------
+    # 1. Load full-line rules (comment out O-lines, %, etc.)
+    # -------------------------------------------------------------
+    line_patterns = data.get("line_patterns") or []
+    for item in line_patterns:
+        if isinstance(item, str):
+            # Old format: just a regex → remove
+            try:
+                regex = re.compile(item, re.IGNORECASE)
+                _LINE_RULES.append({"regex": regex, "action": "remove"})
+            except re.error as e:
+                print(f"Invalid line_pattern regex '{item}': {e}")
+
+        elif isinstance(item, dict):
+            match_pat = item.get("match", "").strip()
+            if not match_pat:
+                continue
+            action = str(item.get("action", "remove")).lower()
+            prefix = item.get("prefix", "")
+            suffix = item.get("suffix", "")
+
+            try:
+                regex = re.compile(match_pat, re.IGNORECASE)
+                _LINE_RULES.append({
+                    "regex": regex,
+                    "action": action if action in ("remove", "comment") else "remove",
+                    "prefix": prefix,
+                    "suffix": suffix
+                })
+            except re.error as e:
+                print(f"Invalid line_pattern regex '{match_pat}': {e}")
+
+    # -------------------------------------------------------------
+    # 2. Load token replacement rules (supports regex + backreferences)
+    # -------------------------------------------------------------
+    token_data = data.get("token_replacements") or data  # backward compat
+
+    for pattern, replacement in token_data.items():
+        if not pattern or pattern.strip() == "":
+            continue
+
+        repl = "" if replacement is None else str(replacement)
+
+        # Detect if pattern contains regex metacharacters or capture groups
+        if any(c in pattern for c in r".+*^$[]\()|?{}") or pattern.startswith("("):
+            # This is a regex pattern
+            try:
+                # Compile with anchors for full token match unless user specifies otherwise
+                if not (pattern.startswith("^") or pattern.startswith(r"\b")):
+                    pattern = "^" + pattern
+                if not (pattern.endswith("$") or pattern.endswith(r"\b")):
+                    pattern += "$"
+
+                regex = re.compile(pattern, re.IGNORECASE)
+                _TOKEN_RULES.append((regex, repl))
+            except re.error as e:
+                print(f"Invalid regex in token_replacements: '{pattern}' → {e}")
+        else:
+            # Simple literal match (e.g. "M6": "")
+            _TOKEN_RULES.append((pattern.upper(), repl))
+
+    print(f"Loaded {len(_LINE_RULES)} line rule(s) and {len(_TOKEN_RULES)} token rule(s) from {TOKEN_REPLACEMENTS_FILE.name}")
 
 # Load rules on import
 load_token_replacement_rules()
@@ -109,36 +138,43 @@ load_token_replacement_rules()
 
 def apply_token_replacements(tokens: list[str]) -> list[str]:
     """
-    Apply all token replacement/removal rules from JSON config.
-    Returns filtered and replaced token list.
+    Apply token replacement rules, including regex with capture groups like (N\\d+) → [\\1]
     """
     result = []
+
     for tok in tokens:
         original = tok
-        tok_upper = tok.upper()
-
         replaced = False
+
         for rule, replacement in _TOKEN_RULES:
             if isinstance(rule, re.Pattern):
-                if rule.fullmatch(tok_upper) or rule.search(tok_upper):
+                # Full match with capture groups
+                m = rule.fullmatch(tok)
+                if m:
                     if replacement == "":
                         replaced = True
                         break
                     else:
-                        tok = replacement
-                        replaced = True
-                        break
-            else:
-                if tok_upper == rule or tok_upper.startswith(rule + " "):
-                    if replacement == "":
-                        replaced = True
-                        break
-                    else:
-                        # Replace just the code part (e.g. M7 → M11C1)
-                        if tok_upper.startswith(rule):
-                            tok = replacement + tok[len(rule):]
-                        else:
+                        # Expand \\1, \\2 etc. in replacement
+                        try:
+                            new_tok = m.expand(replacement)
+                            tok = new_tok
+                            replaced = True
+                            break
+                        except re.error:
+                            # fallback: treat as literal
                             tok = replacement
+                            replaced = True
+                            break
+            else:
+                # Simple string match (old behavior)
+                up = tok.upper()
+                if up == rule or up.startswith(rule + " "):
+                    if replacement == "":
+                        replaced = True
+                        break
+                    else:
+                        tok = replacement + (tok[len(rule):] if len(tok) > len(rule) else "")
                         replaced = True
                         break
 
