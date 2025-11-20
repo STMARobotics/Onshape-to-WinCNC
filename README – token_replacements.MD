@@ -78,7 +78,7 @@ Use keys that start with `_` — they are **ignored** by the script but perfect 
 | `M7` / `M9` | Convert mist coolant to WinCNC format | `M7` → `M11C1` |
 | `G17`, `G40`, `G80` | Remove unsupported modal codes | Removed |
 | `(N\\d+)` | Comment line numbers | `N150` → `[N150]` |
-| `(T(?:[7-9]|1[0-6]))` | Comment only tools 7–16 (your rack) | `T12` → `[T12]` |
+| `(T(?:[7-9]\|1[0-6]))` | Comment only tools 7–16 (your rack) | `T12` → `[T12]` |
 | `line_patterns` → `action: comment` | Comment entire lines (O-lines, `%`) | `O1000` → `[O1000]` |
 
 ## Quick Customization Cheat Sheet
