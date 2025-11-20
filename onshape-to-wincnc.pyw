@@ -31,10 +31,159 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Optional
+from typing import List, Tuple, Any
 
 
+# WindowsC:\Users\<YourUsername>\.onshape_to_wincnc_settings.json
+# macOS/Users/<YourUsername>/.onshape_to_wincnc_settings.json
+# Linux/home/<yourusername>/.onshape_to_wincnc_settings.json
 SETTINGS_FILE = Path.home() / '.onshape_to_wincnc_settings.json'
 
+TOKEN_REPLACEMENTS_FILE = Path(__file__).with_name("token_replacements.json")
+
+
+
+# Cache the rules at startup
+_LINE_RULES: List[dict] = []        # Full line processing rules
+_TOKEN_RULES: List[Tuple[Any, str]] = []  # Token rules (regex or str, replacement)
+
+def load_token_replacement_rules():
+    """Load both line-level and token-level rules from token_replacements.json"""
+    global _LINE_RULES, _TOKEN_RULES
+    _LINE_RULES = []
+    _TOKEN_RULES = []
+
+    if not TOKEN_REPLACEMENTS_FILE.exists():
+        print(f"Warning: {TOKEN_REPLACEMENTS_FILE} not found. Using minimal defaults.")
+        # Minimal fallback
+        _LINE_RULES = [
+            {"regex": re.compile(r"^[Oo]\d+.*$", re.IGNORECASE), "action": "comment", "prefix": "[", "suffix": "]"},
+            {"regex": re.compile(r"^%.*$", re.IGNORECASE), "action": "comment", "prefix": "[", "suffix": "]"}
+        ]
+        return
+
+    try:
+        raw_data = TOKEN_REPLACEMENTS_FILE.read_text(encoding="utf-8")
+        data = json.loads(raw_data)
+    except Exception as e:
+        print(f"Error reading {TOKEN_REPLACEMENTS_FILE}: {e}")
+        return
+
+    # -------------------------------------------------------------
+    # 1. Load full-line rules (comment out O-lines, %, etc.)
+    # -------------------------------------------------------------
+    line_patterns = data.get("line_patterns") or []
+    for item in line_patterns:
+        if isinstance(item, str):
+            # Old format: just a regex → remove
+            try:
+                regex = re.compile(item, re.IGNORECASE)
+                _LINE_RULES.append({"regex": regex, "action": "remove"})
+            except re.error as e:
+                print(f"Invalid line_pattern regex '{item}': {e}")
+
+        elif isinstance(item, dict):
+            match_pat = item.get("match", "").strip()
+            if not match_pat:
+                continue
+            action = str(item.get("action", "remove")).lower()
+            prefix = item.get("prefix", "")
+            suffix = item.get("suffix", "")
+
+            try:
+                regex = re.compile(match_pat, re.IGNORECASE)
+                _LINE_RULES.append({
+                    "regex": regex,
+                    "action": action if action in ("remove", "comment") else "remove",
+                    "prefix": prefix,
+                    "suffix": suffix
+                })
+            except re.error as e:
+                print(f"Invalid line_pattern regex '{match_pat}': {e}")
+
+    # -------------------------------------------------------------
+    # 2. Load token replacement rules (supports regex + backreferences)
+    # -------------------------------------------------------------
+    token_data = data.get("token_replacements") or data  # backward compat
+
+    for pattern, replacement in token_data.items():
+        if not pattern or pattern.strip() == "":
+            continue
+
+        repl = "" if replacement is None else str(replacement)
+
+        # Detect if pattern contains regex metacharacters or capture groups
+        if any(c in pattern for c in r".+*^$[]\()|?{}") or pattern.startswith("("):
+            # This is a regex pattern
+            try:
+                # Compile with anchors for full token match unless user specifies otherwise
+                if not (pattern.startswith("^") or pattern.startswith(r"\b")):
+                    pattern = "^" + pattern
+                if not (pattern.endswith("$") or pattern.endswith(r"\b")):
+                    pattern += "$"
+
+                regex = re.compile(pattern, re.IGNORECASE)
+                _TOKEN_RULES.append((regex, repl))
+            except re.error as e:
+                print(f"Invalid regex in token_replacements: '{pattern}' → {e}")
+        else:
+            # Simple literal match (e.g. "M6": "")
+            _TOKEN_RULES.append((pattern.upper(), repl))
+
+    print(f"Loaded {len(_LINE_RULES)} line rule(s) and {len(_TOKEN_RULES)} token rule(s) from {TOKEN_REPLACEMENTS_FILE.name}")
+
+# Load rules on import
+load_token_replacement_rules()
+
+
+def apply_token_replacements(tokens: list[str]) -> list[str]:
+    """
+    Apply token replacement rules, including regex with capture groups like (N\\d+) → [\\1]
+    """
+    result = []
+
+    for tok in tokens:
+        original = tok
+        replaced = False
+
+        for rule, replacement in _TOKEN_RULES:
+            if isinstance(rule, re.Pattern):
+                # Full match with capture groups
+                m = rule.fullmatch(tok)
+                if m:
+                    if replacement == "":
+                        replaced = True
+                        break
+                    else:
+                        # Expand \\1, \\2 etc. in replacement
+                        try:
+                            new_tok = m.expand(replacement)
+                            tok = new_tok
+                            replaced = True
+                            break
+                        except re.error:
+                            # fallback: treat as literal
+                            tok = replacement
+                            replaced = True
+                            break
+            else:
+                # Simple string match (old behavior)
+                up = tok.upper()
+                if up == rule or up.startswith(rule + " "):
+                    if replacement == "":
+                        replaced = True
+                        break
+                    else:
+                        tok = replacement + (tok[len(rule):] if len(tok) > len(rule) else "")
+                        replaced = True
+                        break
+
+        if not replaced:
+            result.append(original)
+        elif replacement != "":  # Only append if not removed
+            result.append(tok)
+
+    return result
 
 def _env_int(name: str, default: Optional[int]) -> Optional[int]:
     """Helper to safely parse integer environment overrides."""
@@ -56,12 +205,9 @@ def _env_int(name: str, default: Optional[int]) -> Optional[int]:
 class MachineSettings:
     """Represents user-editable ShopSabre integration parameters."""
 
-    mist_port: Optional[int] = None
-    flood_port: Optional[int] = None
     output_directory: Optional[str] = None
     output_name_mode: str = 'prefix'
     output_name_value: str = 'SS23_'
-    remove_toolchange: bool = True
 
     @staticmethod
     def _coerce_bool(value, fallback: bool) -> bool:
@@ -90,12 +236,9 @@ class MachineSettings:
     @classmethod
     def load(cls) -> 'MachineSettings':
         defaults = {
-            'mist_port': _env_int('SHOP_SABRE_MIST_PORT', _env_int('SHOP_SABRE_MIST_OUTPUT', None)),
-            'flood_port': _env_int('SHOP_SABRE_FLOOD_PORT', None),
             'output_directory': None,
             'output_name_mode': 'prefix',
             'output_name_value': 'SS23_',
-            'remove_toolchange': True,
         }
         data = {}
         if SETTINGS_FILE.exists():
@@ -103,28 +246,16 @@ class MachineSettings:
                 data = json.loads(SETTINGS_FILE.read_text(encoding='utf-8'))
             except Exception:
                 data = {}
-        mist = cls._coerce_channel(
-            data.get('mist_port', data.get('mist_output')),
-            defaults['mist_port']
-        )
-        flood = cls._coerce_channel(data.get('flood_port'), defaults['flood_port'])
         raw_directory = data.get('output_directory')
         directory = str(raw_directory).strip() if raw_directory else ''
         directory = os.path.abspath(os.path.expanduser(directory)) if directory else None
         mode_raw = str(data.get('output_name_mode', defaults['output_name_mode'])).strip().lower()
         mode = mode_raw if mode_raw in ('prefix', 'suffix') else defaults['output_name_mode']
         name_value = str(data.get('output_name_value', defaults['output_name_value']))
-        remove_toolchange = cls._coerce_bool(
-            data.get('remove_toolchange'),
-            defaults['remove_toolchange'],
-        )
         return cls(
-            mist_port=mist,
-            flood_port=flood,
             output_directory=directory,
             output_name_mode=mode,
             output_name_value=name_value,
-            remove_toolchange=remove_toolchange,
         )
 
     def save(self) -> None:
@@ -228,111 +359,6 @@ def process_arc_line(line: str, last_g: str):
     return line, last_g
 
 
-def remove_unsupported_tokens(
-    tokens,
-    remove_toolchange: bool,
-    mist_port: Optional[int],
-    flood_port: Optional[int]
-):
-    """Filter out tokens that WinCNC does not support or should be handled separately.
-
-    Removes program delimiters (%, O#####), line numbers (N####), tool
-    length offsets (H#). Converts mist coolant codes (M7/M9) and flood
-    coolant (M8/M9) to M11C/M12C pairs when their ports are configured;
-    otherwise those commands are removed. Tool change commands (M6) can be
-    stripped when requested. Omits plane selection, cutter
-    compensation and canned cycle cancel codes (G17, G40, G80). G49
-    (tool length cancel) is retained and handled in a post-processing
-    step. Tool selection (T#) words are preserved when tool changes are
-    kept so they can be paired with M6 in WinCNC's expected format.
-    """
-    result = []
-    for tok in tokens:
-        up = tok.upper()
-        # Skip program delimiters and program numbers
-        if up.startswith('%'):
-            continue
-        if up.startswith('O') and up[1:].isdigit():
-            continue
-        # Remove line numbers
-        if up.startswith('N') and up[1:].isdigit():
-            continue
-        # Remove tool selection and length offset words
-        if up.startswith('T') and up[1:].replace('.', '').isdigit():
-            if remove_toolchange:
-                continue
-            result.append(up)
-            continue
-        if up.startswith('H') and up[1:].replace('.', '').isdigit():
-            continue
-        # Handle coolant commands (mist only)
-        if up == 'M7':
-            if mist_port is None:
-                continue
-            result.append(f"M11C{mist_port}")
-            continue
-        if up == 'M9':
-            if mist_port is None and flood_port is None:
-                continue
-            if mist_port is not None:
-                result.append(f"M12C{mist_port}")
-            if flood_port is not None:
-                result.append(f"M12C{flood_port}")
-            continue
-        # Optionally handle flood coolant (M8)
-        if up == 'M8':
-            if flood_port is None:
-                continue
-            result.append(f"M11C{flood_port}")
-            continue
-        # Optionally remove tool change commands
-        if remove_toolchange and up == 'M6':
-            continue
-        # Omit plane selection and cutter compensation codes; these can
-        # cause syntax or multiple command errors if combined with other G-codes.
-        if up in ('G17', 'G40', 'G80'):
-            continue
-        result.append(tok)
-    return result
-
-
-def normalize_tool_change(tokens: list[str]) -> list[str]:
-    """Ensure tool changes follow the "TX M6" format expected by WinCNC."""
-
-    if not tokens:
-        return tokens
-
-    tool_token = None
-    has_m6 = False
-    for tok in tokens:
-        up = tok.upper()
-        if up.startswith('T') and up[1:].replace('.', '').isdigit():
-            if tool_token is None:
-                tool_token = up
-            continue
-        if up == 'M6':
-            has_m6 = True
-
-    if not has_m6:
-        return tokens
-
-    remaining = []
-    for tok in tokens:
-        up = tok.upper()
-        if up == 'M6':
-            continue
-        if up.startswith('T') and up[1:].replace('.', '').isdigit():
-            continue
-        remaining.append(tok)
-
-    ordered = []
-    if tool_token:
-        ordered.append(tool_token)
-    ordered.append('M6')
-    ordered.extend(remaining)
-    return ordered
-
-
 def split_by_multiple_commands(tokens):
     """Divide tokens into groups with at most one G or M command."""
     lines = []
@@ -365,80 +391,113 @@ def get_g_code(token: str):
 
 
 def convert_lines(
-    lines,
-    remove_toolchange: bool = True,
-    mist_port: Optional[int] = None,
-    flood_port: Optional[int] = None
+    lines
 ):
-    """Convert a list of G-code lines into WinCNC-friendly format.
-
-    Parameters
-    ----------
-    lines : list[str]
-        Raw G-code lines.
-    remove_toolchange : bool
-        If True, remove M6 commands.
-    mist_port : Optional[int]
-        Mister port number used to translate M7/M9 into M11C/M12C when set.
-    flood_port : Optional[int]
-        Flood port number used to translate M8/M9 into M11C/M12C when set.
+    """
+    Convert a list of G-code lines into WinCNC-friendly format using JSON config.
     """
     converted = []
     last_motion = None
+
     for original_line in lines:
-        line = original_line.rstrip('\n')
+        line = original_line.rstrip('\n').rstrip('\r')
+
+        # ------------------------------------------------------------------
+        # 1. Full-line handling: comment out or remove lines based on JSON rules
+        # ------------------------------------------------------------------
+        handled = False
+        for rule in _LINE_RULES:
+            if rule["regex"].match(line):
+                action = rule["action"]
+                if action == "remove":
+                    handled = True
+                    break
+                elif action == "comment":
+                    commented = f"{rule['prefix']}{line.strip()}{rule['suffix']}"
+                    converted.append(commented)
+                    handled = True
+                    break
+        if handled:
+            continue  # Skip further processing of this line
+
+        # ------------------------------------------------------------------
+        # 2. Remove semicolon comments (still useful for inline ones)
+        # ------------------------------------------------------------------
         line = remove_semicolon_comments(line)
+
+        # ------------------------------------------------------------------
+        # 3. Convert (comments) → [comments] and extract them
+        # ------------------------------------------------------------------
         content_line, bracket_comments = parentheses_to_bracket_lines(line)
         if not content_line.strip() and not bracket_comments:
             converted.append('')
             continue
+
+        # ------------------------------------------------------------------
+        # 4. Split S-word from M3/M4/M5 if combined
+        # ------------------------------------------------------------------
         for sm_line in split_spindle_speed_and_m(content_line.strip()):
             tokens = sm_line.split()
-            tokens = remove_unsupported_tokens(tokens, remove_toolchange, mist_port, flood_port)
+
+            # ------------------------------------------------------------------
+            # 5. Apply JSON token replacement rules (remove M6, convert M7→M11C1, etc.)
+            # ------------------------------------------------------------------
+            tokens = apply_token_replacements(tokens)
             if not tokens:
                 continue
-            tokens = normalize_tool_change(tokens)
+
+            # ------------------------------------------------------------------
+            # 6. Split blocks with multiple G/M codes (WinCNC prefers one per line)
+            # ------------------------------------------------------------------
             grouped = split_by_multiple_commands(tokens)
             for group in grouped:
                 if not group:
                     continue
+
+                # Determine current G-code (for non-modal G2/G3 support)
                 g_code_in_line = None
                 for tok in group:
-                    g_code_in_line = get_g_code(tok)
-                    if g_code_in_line:
+                    g_code = get_g_code(tok)
+                    if g_code:
+                        g_code_in_line = g_code
                         break
+
                 if g_code_in_line:
                     m = re.match(r'^G0?([0123])', g_code_in_line)
                     if m:
                         last_motion = f"G{m.group(1)}"
+
+                # Re-insert last motion code (G0/G1/G2/G3) if needed for non-modal arcs/lines
                 else:
-                    # If no G-code in this group, prefix last motion on coordinate lines
                     if last_motion:
                         has_arc = any(tok[0].upper() in ('I', 'J', 'K', 'R') for tok in group)
-                        has_lin = any(tok[0].upper() in ('X', 'Y', 'Z', 'W') for tok in group)
+                        has_lin = any(tok[0].upper() in ('X', 'Y', 'Z', 'A', 'B', 'C') for tok in group)
                         if last_motion in ('G2', 'G3') and has_arc:
                             group.insert(0, last_motion)
                         elif last_motion in ('G0', 'G1') and has_lin:
                             group.insert(0, last_motion)
+
                 converted.append(' '.join(group))
+
+        # Add extracted bracket comments
         converted.extend(bracket_comments)
-    # After processing all lines, perform post-processing on the converted list.
-    # 1. Handle placement of G49 (tool length cancel) commands:
-    #    - If there is a spindle stop (M5), remove any G49 before the first M5
-    #      and keep those that follow.
-    #    - If there is no M5, keep only the last G49 and drop earlier occurrences.
+
+    # ------------------------------------------------------------------
+    # Post-processing: G49 handling (tool length compensation cancel)
+    # ------------------------------------------------------------------
     m5_index = None
     for idx, ln in enumerate(converted):
         if ln.strip().upper().startswith('M5'):
             m5_index = idx
             break
+
     final_lines = []
     if m5_index is None:
-        # Retain only the last G49
-        g49_indices = [i for i, ln in enumerate(converted) if ln.strip().upper().startswith('G49')]
+        # No M5 → keep only the last G49
+        g49_indices = [i for i, ln in enumerate(converted) if ln.strip().upper() == 'G49']
         remove_set = set(g49_indices[:-1])
         for i, ln in enumerate(converted):
-            if i in remove_set and ln.strip().upper().startswith('G49'):
+            if i in remove_set and ln.strip().upper() == 'G49':
                 continue
             final_lines.append(ln)
     else:
@@ -447,36 +506,32 @@ def convert_lines(
             stripped = ln.strip().upper()
             if stripped.startswith('M5'):
                 seen_m5 = True
-                final_lines.append(ln)
-                continue
-            if stripped.startswith('G49'):
+            if stripped == 'G49':
                 if not seen_m5:
-                    continue
-                else:
-                    final_lines.append(ln)
-                    continue
+                    continue  # Remove G49 before first M5
             final_lines.append(ln)
-    # 2. Ensure there are two blank lines following the first G90 near the top
+
+    # ------------------------------------------------------------------
+    # Ensure two blank lines after first G90
+    # ------------------------------------------------------------------
     for idx, line in enumerate(final_lines):
         if line.strip().upper() == 'G90':
             blank_count = 0
             j = idx + 1
-            while j < len(final_lines) and final_lines[j].strip() == '':
+            while j < len(final_lines) and not final_lines[j].strip():
                 blank_count += 1
                 j += 1
             while blank_count < 2:
                 final_lines.insert(idx + 1, '')
                 blank_count += 1
             break
+
     return final_lines
 
 
 def convert_file(
     input_path: str,
-    output_path: str,
-    remove_toolchange: bool = True,
-    mist_port: Optional[int] = None,
-    flood_port: Optional[int] = None
+    output_path: str
 ) -> None:
     """Convert the input G-code file and write to the given output path.
 
@@ -486,13 +541,6 @@ def convert_file(
         Input G-code file path.
     output_path : str
         Output G-code file path.
-    remove_toolchange : bool
-        If True, remove M6 commands.
-    mist_port : Optional[int]
-        Mister port number used to translate M7/M9 into M11C/M12C when set.
-    flood_port : Optional[int]
-        Flood port number used to translate M8/M9 into M11C/M12C when set.
-
     Raises
     ------
     IOError
@@ -501,10 +549,7 @@ def convert_file(
     with open(input_path, 'r', encoding='utf-8', errors='ignore') as f_in:
         lines = f_in.readlines()
     converted = convert_lines(
-        lines,
-        remove_toolchange=remove_toolchange,
-        mist_port=mist_port,
-        flood_port=flood_port
+        lines
     )
     with open(output_path, 'w', encoding='utf-8') as f_out:
         for cl in converted:
@@ -587,66 +632,6 @@ class ConverterGUI:
             command=self.open_output_settings_dialog,
         ).grid(row=3, column=0, columnspan=3, sticky='w', pady=(12, 0))
 
-        # Options area
-        options_card = ttk.Frame(self.main_frame, style='Card.TFrame', padding=15)
-        options_card.grid(row=2, column=0, sticky='ew')
-        options_card.columnconfigure(0, weight=1)
-        options_card.columnconfigure(1, weight=0)
-
-        ttk.Label(options_card, text='Configuration', style='Heading.TLabel').grid(
-            row=0, column=0, sticky='w', pady=(0, 10)
-        )
-
-        self.remove_toolchange_var = tk.BooleanVar(value=self.settings.remove_toolchange)
-        self.mist_port_var = tk.StringVar(value='' if self.settings.mist_port is None else str(self.settings.mist_port))
-        self.flood_port_var = tk.StringVar(value='' if self.settings.flood_port is None else str(self.settings.flood_port))
-
-        ttk.Label(options_card, text='Mister Port (leave blank to disable)', style='Card.TLabel').grid(
-            row=1, column=0, sticky='w'
-        )
-
-        mist_frame = ttk.Frame(options_card, style='Card.TFrame', padding=10)
-        mist_frame.grid(row=2, column=0, sticky='ew', pady=(6, 0))
-        mist_frame.columnconfigure(1, weight=1)
-
-        ttk.Label(mist_frame, text='Port', style='Card.TLabel').grid(row=0, column=0, sticky='w')
-        ttk.Entry(mist_frame, textvariable=self.mist_port_var, width=12).grid(
-            row=0, column=1, padx=(10, 0), sticky='w'
-        )
-        ttk.Button(
-            mist_frame,
-            text='Save Mister Port',
-            command=self._save_mist_port_inline,
-        ).grid(row=0, column=2, padx=(10, 0))
-
-        
-
-        ttk.Label(options_card, text='Flood Port (leave blank to disable)', style='Card.TLabel').grid(
-            row=4, column=0, sticky='w', pady=(12, 0)
-        )
-
-        flood_frame = ttk.Frame(options_card, style='Card.TFrame', padding=10)
-        flood_frame.grid(row=5, column=0, sticky='ew', pady=(6, 0))
-        flood_frame.columnconfigure(1, weight=1)
-
-        ttk.Label(flood_frame, text='Port', style='Card.TLabel').grid(row=0, column=0, sticky='w')
-        ttk.Entry(flood_frame, textvariable=self.flood_port_var, width=12).grid(
-            row=0, column=1, padx=(10, 0), sticky='w'
-        )
-        ttk.Button(
-            flood_frame,
-            text='Save Flood Port',
-            command=self._save_flood_port_inline,
-        ).grid(row=0, column=2, padx=(10, 0))
-
-        self.remove_toolchange_check = ttk.Checkbutton(
-            options_card,
-            text='Remove all tool change commands (M6)',
-            variable=self.remove_toolchange_var,
-            command=self._toggle_remove_toolchange,
-        )
-        self.remove_toolchange_check.grid(row=7, column=0, sticky='w', pady=(5, 0))
-
         # Actions and status
         action_frame = ttk.Frame(self.main_frame, style='TFrame', padding=(0, 15, 0, 0))
         action_frame.grid(row=3, column=0, sticky='ew')
@@ -708,21 +693,6 @@ class ConverterGUI:
         derived = self._derive_output_path(input_path)
         self._set_output_entry(derived)
 
-    def _toggle_remove_toolchange(self) -> None:
-        """Persist the user's preference for stripping tool changes."""
-
-        self.settings.remove_toolchange = self.remove_toolchange_var.get()
-        try:
-            self.settings.save()
-        except OSError as exc:
-            messagebox.showerror('Save Failed', f'Unable to save settings:\n{exc}')
-            self.remove_toolchange_var.set(self.settings.remove_toolchange)
-            return
-
-        self.status_var.set(
-            'Tool change removal enabled.' if self.settings.remove_toolchange else 'Tool change removal disabled.'
-        )
-
     def convert(self) -> None:
         """Perform the conversion when the Convert button is clicked."""
         input_path = self.input_entry.get().strip()
@@ -738,24 +708,12 @@ class ConverterGUI:
             self.status_var.set('Checking file...')
             self.root.update_idletasks()
 
-            mist_port, valid = self._update_mist_port_from_entry(persist=True)
-            if not valid:
-                self.status_var.set('Conversion aborted: mist port not set correctly.')
-                return
-            flood_port, valid = self._update_flood_port_from_entry(persist=True)
-            if not valid:
-                self.status_var.set('Conversion aborted: flood port not set correctly.')
-                return
-
             # If no issue detected, perform conversion
             self.status_var.set('Converting...')
             self.root.update_idletasks()
             convert_file(
                 input_path,
                 output_path,
-                remove_toolchange=self.remove_toolchange_var.get(),
-                mist_port=mist_port,
-                flood_port=flood_port,
             )
 
             self.status_var.set(f'Conversion complete: {output_path}')
@@ -890,68 +848,6 @@ class ConverterGUI:
         if parsed <= 0:
             raise ValueError(f'{label} must be greater than zero.')
         return parsed
-
-    def _update_mist_port_from_entry(self, *, persist: bool = False, show_success: bool = False) -> tuple[Optional[int], bool]:
-        """Validate and optionally persist the mister port entry."""
-
-        try:
-            mist = self._parse_channel_value(self.mist_port_var.get(), 'Mist port')
-        except ValueError as exc:
-            messagebox.showerror('Invalid Value', str(exc))
-            return None, False
-
-        self.settings.mist_port = mist
-        if persist:
-            try:
-                self.settings.save()
-            except OSError as exc:
-                messagebox.showerror('Save Failed', f'Unable to save settings:\n{exc}')
-                return mist, False
-
-        if show_success:
-            messagebox.showinfo('Settings Saved', 'Mister port saved successfully.')
-
-        return mist, True
-
-    def _save_mist_port_inline(self) -> None:
-        """Persist mister port edits from the main window."""
-
-        mist_port, valid = self._update_mist_port_from_entry(persist=True, show_success=True)
-        if valid:
-            self.status_var.set(
-                'Mister port disabled.' if mist_port is None else f'Mister port saved: {mist_port}'
-            )
-
-    def _update_flood_port_from_entry(self, *, persist: bool = False, show_success: bool = False) -> tuple[Optional[int], bool]:
-        """Validate and optionally persist the flood port entry."""
-
-        try:
-            flood = self._parse_channel_value(self.flood_port_var.get(), 'Flood port')
-        except ValueError as exc:
-            messagebox.showerror('Invalid Value', str(exc))
-            return None, False
-
-        self.settings.flood_port = flood
-        if persist:
-            try:
-                self.settings.save()
-            except OSError as exc:
-                messagebox.showerror('Save Failed', f'Unable to save settings:\n{exc}')
-                return flood, False
-
-        if show_success:
-            messagebox.showinfo('Settings Saved', 'Flood port saved successfully.')
-
-        return flood, True
-
-    def _save_flood_port_inline(self) -> None:
-        """Persist flood port edits from the main window."""
-
-        flood_port, valid = self._update_flood_port_from_entry(persist=True, show_success=True)
-        if valid:
-            self.status_var.set(
-                'Flood port disabled.' if flood_port is None else f'Flood port saved: {flood_port}'
-            )
 
 
 def main() -> None:
