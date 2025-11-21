@@ -668,7 +668,19 @@ class ConverterGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title('Onshape to WinCNC Converter')
-        self.root.configure(bg='#f4f6fb')
+        self.palette = {
+            'primary': '#001489',
+            'accent': '#ffd400',
+            'accent_active': '#e6be00',
+            'background': '#001489',
+            'card': '#ffffff',
+            'border': '#ffd400',
+            'text': '#0f172a',
+            'muted_text': '#4b5563',
+            'on_primary_text': '#ffffff',
+            'muted_on_primary': '#e2e8f0',
+        }
+        self.root.configure(bg=self.palette['background'])
         self.settings = SETTINGS
         self.output_settings_window: Optional[tk.Toplevel] = None
 
@@ -678,15 +690,65 @@ class ConverterGUI:
         except tk.TclError:
             # Fallback to default theme if clam is unavailable.
             pass
-        style.configure('TFrame', background='#f4f6fb')
-        style.configure('Card.TFrame', background='#ffffff', borderwidth=1, relief='solid')
-        style.configure('Card.TLabel', background='#ffffff', font=('Segoe UI', 10))
-        style.configure('Heading.TLabel', background='#ffffff', font=('Segoe UI Semibold', 11))
-        style.configure('Body.TLabel', background='#f4f6fb', font=('Segoe UI', 10))
-        style.configure('Status.TLabel', background='#f4f6fb', foreground='#2563eb', font=('Segoe UI', 10))
-        style.configure('Accent.TButton', font=('Segoe UI Semibold', 11), padding=(12, 6), foreground='#ffffff',
-                        background='#2563eb')
-        style.map('Accent.TButton', background=[('active', '#1d4ed8')], foreground=[('disabled', '#d1d5db')])
+        style.configure('TFrame', background=self.palette['background'])
+        style.configure(
+            'Card.TFrame',
+            background=self.palette['card'],
+            borderwidth=1,
+            relief='solid',
+            bordercolor=self.palette['border'],
+        )
+        style.configure(
+            'Card.TLabel',
+            background=self.palette['card'],
+            foreground=self.palette['text'],
+            font=('Segoe UI', 10),
+        )
+        style.configure(
+            'Heading.TLabel',
+            background=self.palette['card'],
+            foreground=self.palette['accent'],
+            font=('Segoe UI Semibold', 11),
+        )
+        style.configure(
+            'Body.TLabel',
+            background=self.palette['background'],
+            foreground=self.palette['on_primary_text'],
+            font=('Segoe UI', 10),
+        )
+        style.configure(
+            'Status.TLabel',
+            background=self.palette['background'],
+            foreground=self.palette['accent'],
+            font=('Segoe UI', 10),
+        )
+        style.configure(
+            'ToolbarHeading.TLabel',
+            background=self.palette['background'],
+            foreground=self.palette['accent'],
+            font=('Segoe UI Semibold', 13),
+        )
+        style.configure(
+            'MutedOnPrimary.TLabel',
+            background=self.palette['background'],
+            foreground=self.palette['muted_on_primary'],
+            font=('Segoe UI', 9, 'italic'),
+        )
+        style.configure(
+            'Accent.TButton',
+            font=('Segoe UI Semibold', 11),
+            padding=(12, 6),
+            foreground='#000000',
+            background=self.palette['accent'],
+            bordercolor=self.palette['accent'],
+            focusthickness=1,
+        )
+        style.map(
+            'Accent.TButton',
+            background=[('active', self.palette['accent_active'])],
+            foreground=[('disabled', '#6b7280')],
+            bordercolor=[('active', self.palette['accent_active'])],
+        )
 
         self.main_frame = ttk.Frame(root, padding=20)
         self.main_frame.grid(row=0, column=0, sticky='nsew')
@@ -844,7 +906,7 @@ class ConverterGUI:
 
         win = tk.Toplevel(self.root)
         win.title('Customize Output Settings')
-        win.configure(bg='#f4f6fb')
+        win.configure(bg=self.palette['background'])
         win.resizable(False, False)
         win.transient(self.root)
         self.output_settings_window = win
@@ -971,6 +1033,7 @@ class ConverterGUI:
         editor_win.title(f"Edit Token Rules — {TOKEN_REPLACEMENTS_FILE.name}")
         editor_win.geometry("1000x740")
         editor_win.minsize(800, 600)
+        editor_win.configure(bg=self.palette['background'])
         editor_win.transient(self.root)
         editor_win.grab_set()
         editor_win.focus_set()
@@ -986,26 +1049,25 @@ class ConverterGUI:
         main.pack(fill='both', expand=True)
 
         # Header
-        header_frame = ttk.Frame(main)
+        header_frame = ttk.Frame(main, style='TFrame')
         header_frame.pack(fill='x', pady=(0, 10))
 
         ttk.Label(
             header_frame,
             text="Edit token_replacements.json",
-            font=('Segoe UI Semibold', 13)
+            style='ToolbarHeading.TLabel'
         ).pack(side='left')
 
         # Status bar at top-right
         status_var = tk.StringVar(value="Ready")
-        status_label = ttk.Label(header_frame, textvariable=status_var, foreground='#2563eb')
+        status_label = ttk.Label(header_frame, textvariable=status_var, style='Status.TLabel')
         status_label.pack(side='right')
 
         # Instructions
         ttk.Label(
             main,
             text="Changes take effect immediately after clicking 'Save & Reload Rules'",
-            foreground='#555555',
-            font=('Segoe UI', 9, 'italic')
+            style='MutedOnPrimary.TLabel'
         ).pack(anchor='w', pady=(0, 10))
 
         # Text editor with scrollbars
