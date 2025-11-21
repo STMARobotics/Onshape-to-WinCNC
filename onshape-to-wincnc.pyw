@@ -663,11 +663,11 @@ def convert_file(
 
 
 class ConverterGUI:
-    """Graphical interface for Onshape to WinCNC conversion."""
+    """Graphical interface for CNC conversion."""
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title('Onshape to WinCNC Converter')
+        self.root.title('CNC Converter')
         self.palette = {
             'primary': '#001489',
             'accent': '#ffd400',
@@ -764,8 +764,7 @@ class ConverterGUI:
         
         info_card = ttk.Frame(self.main_frame, style='Card.TFrame', padding=15)
         info_card.grid(row=0, column=0, sticky='ew')
-        ttk.Label(info_card, text='Onshape to WinCNC', style='Heading.TLabel').grid(
-            row=0, column=0, columnspan=3, sticky='w', pady=(0, 10)
+        ttk.Label(info_card, text='Onshape to WinCNC', style='Heading.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 10))
         info_label = ttk.Label(
             info_card,
             text=instructions,
@@ -774,7 +773,7 @@ class ConverterGUI:
             anchor='w',
             wraplength=580
         )
-        info_label.grid(row=0, column=0, sticky='w')
+        info_label.grid(row=1, column=0, sticky='w')
 
         # File selection card
         file_card = ttk.Frame(self.main_frame, style='Card.TFrame', padding=15)
