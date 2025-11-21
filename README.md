@@ -22,6 +22,33 @@ The converter ingests a .nc program exported from Onshape CAM Studio and rewrite
 Output files receive a bracketed ASCII-art header and are written as `.tap` files. By default the output name is prefixed with `SS23_`, but the **Output Settings…** dialog lets you choose a destination directory and swap between prefix/suffix naming.
 
 ---
+# How to Run the Tool
+### For Normal Users (99% of people) — Just Double-Click!
+
+1. Download the latest version from the **Releases** page:  
+   → https://github.com/STMARobotics/Onshape-to-WinCNC/releases/latest
+2. Click on **Onshape-to-WinCNC.exe** to download it
+3. Double-click the downloaded `Onshape-to-WinCNC.exe` file  
+   → The converter window opens instantly — no installation needed!
+
+That’s it! Works on any Windows 10/11 computer, even if Python is not installed.
+
+## Run from Command Line
+### Prerequisites (Windows 10/11)
+
+1. Install **Python 3.10–3.12** (64-bit) from https://www.python.org/downloads/  
+   → During install: check **"Add Python to PATH"**
+
+2. Download or clone this repository
+
+```bat
+:: 1. Open Command Prompt or PowerShell
+:: 2. Navigate to the folder containing the .pyw file
+cd C:\path\to\your\folder
+
+:: 3. Run with Python (requires Python 3.10–3.12 installed)
+python onshape-to-wincnc.pyw
+```
 
 ## How to Build the Executable (one-time for developers)
 
