@@ -757,12 +757,15 @@ class ConverterGUI:
 
         # Instruction card
         instructions = (
-            "Onshape to WinCNC (header)\n"
             "This application converts Onshape CAM Studio g-code to Shop Sabre WinCNC compatible .tap files. Conversion settings can be edited by clicking the \"Edit Token Rules\" button below.\n\n"
             "You must select \"3-Axis Generic Milling - Fanuc\" as the Machine in Onshape CAM Studio"
         )
+      
+        
         info_card = ttk.Frame(self.main_frame, style='Card.TFrame', padding=15)
         info_card.grid(row=0, column=0, sticky='ew')
+        ttk.Label(info_card, text='Onshape to WinCNC', style='Heading.TLabel').grid(
+            row=0, column=0, columnspan=3, sticky='w', pady=(0, 10)
         info_label = ttk.Label(
             info_card,
             text=instructions,
