@@ -735,6 +735,20 @@ class ConverterGUI:
             font=('Segoe UI', 9, 'italic'),
         )
         style.configure(
+            'Link.TButton',
+            background=self.palette['card'],
+            foreground=self.palette['accent'],
+            bordercolor=self.palette['muted'],
+            padding=(8, 4),
+            font=('Segoe UI', 10),
+        )
+        style.map(
+            'Link.TButton',
+            background=[('active', self.palette['card'])],
+            foreground=[('active', self.palette['accent_active'])],
+            bordercolor=[('active', self.palette['accent_active'])],
+        )
+        style.configure(
             'Accent.TButton',
             font=('Segoe UI Semibold', 11),
             padding=(12, 6),
@@ -761,11 +775,19 @@ class ConverterGUI:
             "You must select \"3-Axis Generic Milling - Fanuc\" as the Machine in Onshape CAM Studio"
         )
       
-      
-        
+
+
         info_card = ttk.Frame(self.main_frame, style='Card.TFrame', padding=15)
         info_card.grid(row=0, column=0, sticky='ew')
+        info_card.columnconfigure(0, weight=1)
         ttk.Label(info_card, text='Onshape to WinCNC', style='Heading.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 10))
+        ttk.Button(
+            info_card,
+            text='About',
+            command=self.show_about,
+            style='Link.TButton',
+            width=8
+        ).grid(row=0, column=1, sticky='e')
         info_label = ttk.Label(
             info_card,
             text=instructions,
@@ -813,10 +835,6 @@ class ConverterGUI:
         action_frame.grid(row=3, column=0, sticky='ew')
         action_frame.columnconfigure(0, weight=1)
 
-        button_frame = ttk.Frame(self.main_frame)
-        button_frame.grid(row=5, column=0, columnspan=3, pady=(30, 10), sticky='ew')
-        button_frame.columnconfigure(0, weight=1)
-
         self.convert_button = ttk.Button(
             action_frame,
             text='Convert File',
@@ -824,14 +842,6 @@ class ConverterGUI:
             command=self.convert
         )
         self.convert_button.grid(row=0, column=0, pady=(0, 10))
-
-        # About button – lower right corner
-        ttk.Button(
-            button_frame,
-            text='About',
-            command=self.show_about,
-            width=12
-        ).grid(row=0, column=1, sticky='e')
 
         self.status_var = tk.StringVar()
         self.status_var.set('Select a file to convert.')
