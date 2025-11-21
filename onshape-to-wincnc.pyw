@@ -26,6 +26,9 @@ when the conversion succeeds or if an error occurs.
 import json
 import os
 import re
+import sys
+import textwrap
+import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import tkinter as tk
@@ -37,9 +40,73 @@ from typing import List, Tuple, Any
 # WindowsC:\Users\<YourUsername>\.onshape_to_wincnc_settings.json
 # macOS/Users/<YourUsername>/.onshape_to_wincnc_settings.json
 # Linux/home/<yourusername>/.onshape_to_wincnc_settings.json
-SETTINGS_FILE = Path.home() / '.onshape_to_wincnc_settings.json'
+SETTINGS_FILE = Path.home() / "AppData" / "Roaming" / "OnshapeToWinCNC" / '.onshape_to_wincnc_settings.json'
 
-TOKEN_REPLACEMENTS_FILE = Path(__file__).with_name("token_replacements.json")
+# Smart path: external file that users can edit
+def get_external_data_file(filename: str) -> Path:
+    """
+    Returns a writable path for data files (like token_replacements.json)
+    - Dev mode (.pyw): same folder as script
+    - Frozen exe: %APPDATA%/OnshapeToWinCNC/filename
+    Creates folder if needed.
+    """
+    if getattr(sys, 'frozen', False):
+        # Running as compiled exe
+        app_dir = Path.home() / "AppData" / "Roaming" / "OnshapeToWinCNC"
+        app_dir.mkdir(parents=True, exist_ok=True)
+        return app_dir / filename
+    else:
+        # Running as .py script
+        return Path(__file__).with_name(filename)
+
+
+def ensure_token_file_exists():
+    """Copy bundled token_replacements.json to external location on first run"""
+    target = get_external_data_file("token_replacements.json")
+    if target.exists():
+        return target
+
+    # Try to extract from bundled resources (PyInstaller)
+    if getattr(sys, 'frozen', False):
+        import tempfile
+        bundled_path = Path(sys._MEIPASS) / "token_replacements.json"  # PyInstaller temp dir
+        if bundled_path.exists():
+            try:
+                import shutil
+                shutil.copy2(bundled_path, target)
+                print(f"Extracted token_replacements.json to {target}")
+                return target
+            except Exception as e:
+                print(f"Failed to extract token file: {e}")
+
+    # Fallback: create minimal working version
+    default_content = {
+        "line_patterns": [
+            {"match": "^[Oo]\\d+.*$", "action": "comment", "prefix": "[", "suffix": "]"},
+            {"match": "^%.*$", "action": "comment", "prefix": "[", "suffix": ")"}
+        ],
+        "token_replacements": {
+            "M6": "",
+            "M7": "M11C8 [ ;Coolant On ]",
+            "M8": "M11C8 [ ;Coolant On ]",
+            "M9": "M12C8 [ ;Coolant Off ]",
+            "G17": " [ G17 ;XY Plane Selection ]",
+            "G40": "[ G40 ;Tool Radius Compensation Off ]",
+            "G49": "[ G49 ;Tool Length Offset Cancel ]",
+            "G80": "G80 [ ;Cancel Canned Cycle ]",
+            "(T(?:[7-9]|1[0-6]))": "[\\1]"
+        }
+    }
+    try:
+        target.write_text(json.dumps(default_content, indent=2), encoding="utf-8")
+        print(f"Created default token_replacements.json at {target}")
+    except Exception as e:
+        print(f"Could not create token file: {e}")
+    return target
+
+
+# THIS is the path you should use everywhere
+TOKEN_REPLACEMENTS_FILE = ensure_token_file_exists()
 
 
 
@@ -390,21 +457,17 @@ def get_g_code(token: str):
     return None
 
 
-def convert_lines(
-    lines
-):
-    """
-    Convert a list of G-code lines into WinCNC-friendly format using JSON config.
-    """
+def convert_lines(lines):
     converted = []
     last_motion = None
 
+    """
+    Convert a list of G-code lines into WinCNC-friendly format using JSON config.
+    """
     for original_line in lines:
         line = original_line.rstrip('\n').rstrip('\r')
 
-        # ------------------------------------------------------------------
         # 1. Full-line handling: comment out or remove lines based on JSON rules
-        # ------------------------------------------------------------------
         handled = False
         for rule in _LINE_RULES:
             if rule["regex"].match(line):
@@ -418,68 +481,63 @@ def convert_lines(
                     handled = True
                     break
         if handled:
-            continue  # Skip further processing of this line
+            continue
 
-        # ------------------------------------------------------------------
-        # 2. Remove semicolon comments (still useful for inline ones)
-        # ------------------------------------------------------------------
+        # 2. Remove semicolon comments
         line = remove_semicolon_comments(line)
 
-        # ------------------------------------------------------------------
         # 3. Convert (comments) → [comments] and extract them
-        # ------------------------------------------------------------------
         content_line, bracket_comments = parentheses_to_bracket_lines(line)
         if not content_line.strip() and not bracket_comments:
             converted.append('')
             continue
 
-        # ------------------------------------------------------------------
         # 4. Split S-word from M3/M4/M5 if combined
-        # ------------------------------------------------------------------
+        split_lines = []
         for sm_line in split_spindle_speed_and_m(content_line.strip()):
             tokens = sm_line.split()
-
-            # ------------------------------------------------------------------
-            # 5. Apply JSON token replacement rules (remove M6, convert M7→M11C1, etc.)
-            # ------------------------------------------------------------------
-            tokens = apply_token_replacements(tokens)
             if not tokens:
                 continue
 
-            # ------------------------------------------------------------------
-            # 6. Split blocks with multiple G/M codes (WinCNC prefers one per line)
-            # ------------------------------------------------------------------
+            # ===== FIXED ORDER: SPLIT COMMANDS FIRST =====
             grouped = split_by_multiple_commands(tokens)
             for group in grouped:
                 if not group:
                     continue
+                # Temporarily join to apply arc/modal logic correctly
+                temp_line = ' '.join(group)
+                split_lines.append((group, temp_line))
 
-                # Determine current G-code (for non-modal G2/G3 support)
-                g_code_in_line = None
-                for tok in group:
-                    g_code = get_g_code(tok)
-                    if g_code:
-                        g_code_in_line = g_code
-                        break
+        # Now process each pre-split group
+        for raw_tokens, temp_line in split_lines:
+            # Re-determine motion mode from original tokens
+            g_code_in_line = None
+            for tok in raw_tokens:
+                g_code = get_g_code(tok)
+                if g_code:
+                    g_code_in_line = g_code
+                    break
 
-                if g_code_in_line:
-                    m = re.match(r'^G0?([0123])', g_code_in_line)
-                    if m:
-                        last_motion = f"G{m.group(1)}"
+            if g_code_in_line:
+                m = re.match(r'^G0?([0123])', g_code_in_line)
+                if m:
+                    last_motion = f"G{m.group(1)}"
 
-                # Re-insert last motion code (G0/G1/G2/G3) if needed for non-modal arcs/lines
-                else:
-                    if last_motion:
-                        has_arc = any(tok[0].upper() in ('I', 'J', 'K', 'R') for tok in group)
-                        has_lin = any(tok[0].upper() in ('X', 'Y', 'Z', 'A', 'B', 'C') for tok in group)
-                        if last_motion in ('G2', 'G3') and has_arc:
-                            group.insert(0, last_motion)
-                        elif last_motion in ('G0', 'G1') and has_lin:
-                            group.insert(0, last_motion)
+            # Insert modal motion code if needed (non-modal G2/G3 support)
+            if not g_code_in_line and last_motion:
+                has_arc = any(tok[0].upper() in ('I', 'J', 'K', 'R') for tok in raw_tokens)
+                has_lin = any(tok[0].upper() in ('X', 'Y', 'Z', 'A', 'B', 'C') for tok in raw_tokens)
+                if last_motion in ('G2', 'G3') and has_arc:
+                    raw_tokens.insert(0, last_motion)
+                elif last_motion in ('G0', 'G1') and has_lin:
+                    raw_tokens.insert(0, last_motion)
 
-                converted.append(' '.join(group))
+            # ===== NOW APPLY TOKEN REPLACEMENTS (after splitting!) =====
+            final_tokens = apply_token_replacements(raw_tokens)
+            if final_tokens:
+                converted.append(' '.join(final_tokens))
 
-        # Add extracted bracket comments
+        # Add extracted bracket comments (from parentheses)
         converted.extend(bracket_comments)
 
     # ------------------------------------------------------------------
@@ -631,6 +689,12 @@ class ConverterGUI:
             text='Output Settings…',
             command=self.open_output_settings_dialog,
         ).grid(row=3, column=0, columnspan=3, sticky='w', pady=(12, 0))
+
+        ttk.Button(
+            file_card,
+            text='Edit Token Rules (Advanced)…',
+            command=self.open_token_rules_editor,
+        ).grid(row=4, column=0, columnspan=3, sticky='w', pady=(8, 0))
 
         # Actions and status
         action_frame = ttk.Frame(self.main_frame, style='TFrame', padding=(0, 15, 0, 0))
@@ -848,6 +912,239 @@ class ConverterGUI:
         if parsed <= 0:
             raise ValueError(f'{label} must be greater than zero.')
         return parsed
+    
+    def open_token_rules_editor(self):
+        """Open a modal window with a live editor for token_replacements.json"""
+        if not TOKEN_REPLACEMENTS_FILE.exists():
+            messagebox.showerror("File Not Found", f"Cannot find token rules file:\n{TOKEN_REPLACEMENTS_FILE}")
+            return
+
+        editor_win = tk.Toplevel(self.root)
+        editor_win.title(f"Edit Token Rules — {TOKEN_REPLACEMENTS_FILE.name}")
+        editor_win.geometry("1000x740")
+        editor_win.minsize(800, 600)
+        editor_win.transient(self.root)
+        editor_win.grab_set()
+        editor_win.focus_set()
+
+        # Center the window
+        editor_win.update_idletasks()
+        x = (editor_win.winfo_screenwidth() // 2) - (editor_win.winfo_width() // 2)
+        y = (editor_win.winfo_screenheight() // 2) - (editor_win.winfo_height() // 2)
+        editor_win.geometry(f"+{x}+{y-30}")
+
+        # Main container
+        main = ttk.Frame(editor_win, padding=15)
+        main.pack(fill='both', expand=True)
+
+        # Header
+        header_frame = ttk.Frame(main)
+        header_frame.pack(fill='x', pady=(0, 10))
+
+        ttk.Label(
+            header_frame,
+            text="Edit token_replacements.json",
+            font=('Segoe UI Semibold', 13)
+        ).pack(side='left')
+
+        # Status bar at top-right
+        status_var = tk.StringVar(value="Ready")
+        status_label = ttk.Label(header_frame, textvariable=status_var, foreground='#2563eb')
+        status_label.pack(side='right')
+
+        # Instructions
+        ttk.Label(
+            main,
+            text="Changes take effect immediately after clicking 'Save & Reload Rules'",
+            foreground='#555555',
+            font=('Segoe UI', 9, 'italic')
+        ).pack(anchor='w', pady=(0, 10))
+
+        # Text editor with scrollbars
+        text_frame = ttk.Frame(main)
+        text_frame.pack(fill='both', expand=True, pady=(0, 10))
+
+        text_widget = tk.Text(
+            text_frame,
+            wrap='none',
+            font=('Consolas', 11),
+            undo=True,
+            autoseparators=True,
+            maxundo=-1,
+            insertwidth=2,
+            padx=8,
+            pady=8
+        )
+        v_scroll = ttk.Scrollbar(text_frame, orient='vertical', command=text_widget.yview)
+        h_scroll = ttk.Scrollbar(text_frame, orient='horizontal', command=text_widget.xview)
+        text_widget.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+
+        text_widget.grid(row=0, column=0, sticky='nsew')
+        v_scroll.grid(row=0, column=1, sticky='ns')
+        h_scroll.grid(row=1, column=0, sticky='ew')
+        text_frame.grid_rowconfigure(0, weight=1)
+        text_frame.grid_columnconfigure(0, weight=1)
+
+        # Load current content (pretty-print if valid JSON)
+        try:
+            raw_content = TOKEN_REPLACEMENTS_FILE.read_text(encoding='utf-8')
+            try:
+                data = json.loads(raw_content)
+                pretty = json.dumps(data, indent=4, ensure_ascii=False)
+                text_widget.insert('1.0', pretty)
+            except:
+                text_widget.insert('1.0', raw_content)
+        except Exception as e:
+            text_widget.insert('1.0', f"; ERROR READING FILE: {e}\n\n{raw_content}")
+
+        # Button frame at bottom
+        button_frame = ttk.Frame(main)
+        button_frame.pack(fill='x')
+
+        # Left side buttons
+        left_buttons = ttk.Frame(button_frame)
+        left_buttons.pack(side='left')
+
+        ttk.Button(
+            left_buttons,
+            text="Save & Reload Rules",
+            style='Accent.TButton',
+            command=lambda: save_and_reload()
+        ).pack(side='left', padx=(0, 8))
+
+        ttk.Button(
+            left_buttons,
+            text="Restore Default",
+            command=lambda: restore_default()
+        ).pack(side='left')
+
+        # Right side: Close button
+        right_buttons = ttk.Frame(button_frame)
+        right_buttons.pack(side='right')
+
+        ttk.Button(
+            right_buttons,
+            text="Close",
+            command=editor_win.destroy
+        ).pack(side='right')
+
+        # Functions used in buttons
+        def save_and_reload():
+            content = text_widget.get('1.0', 'end-1c').rstrip()
+            if not content.strip():
+                messagebox.showwarning("Empty File", "The file is empty. Save aborted.")
+                return
+
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError as e:
+                messagebox.showerror("Invalid JSON", f"JSON syntax error:\n\n{e}")
+                return
+
+            # Optional regex validation (warnings only)
+            warnings = []
+            for item in parsed.get("line_patterns", []):
+                if isinstance(item, dict) and item.get("match"):
+                    try:
+                        re.compile(item["match"])
+                    except re.error as e:
+                        warnings.append(f"line_patterns → '{item['match']}' → {e}")
+
+            for pat in parsed.get("token_replacements", {}).keys():
+                if any(c in pat for c in ".+*^$[]()|?{}"):
+                    try:
+                        test = pat if pat.startswith('^') else '^' + pat
+                        test = test if test.endswith('$') else test + '$'
+                        re.compile(test)
+                    except re.error as e:
+                        warnings.append(f"token_replacements → '{pat}' → {e}")
+
+            if warnings:
+                if not messagebox.askyesno("Regex Warnings",
+                    "Some regex patterns may be invalid:\n\n" + "\n".join(warnings[:8]) +
+                    "\n\nSave anyway?"):
+                    return
+
+            # === SAVE FILE ===
+            try:
+                TOKEN_REPLACEMENTS_FILE.write_text(content + "\n", encoding='utf-8')
+            except Exception as e:
+                messagebox.showerror("Save Failed", f"Could not write file:\n{e}")
+                return
+
+            # === RELOAD RULES ===
+            try:
+                load_token_replacement_rules()
+                save_time = time.strftime('%H:%M:%S')
+                full_path = str(TOKEN_REPLACEMENTS_FILE.resolve())
+
+                status_var.set(f"Saved & reloaded • {save_time}")
+                
+                try:
+                    import subprocess
+                    import platform
+                    full_path = str(TOKEN_REPLACEMENTS_FILE.resolve())
+                    if platform.system() == "Windows":
+                        # Make path clickable in messagebox (using HTML-like trick in title)
+                        messagebox.showinfo(
+                            "Success ✓",
+                            f"Token rules saved and reloaded!\n\n"
+                            f"Location:\n{full_path}\n\n"
+                            f"Click the path above and press Ctrl+C to copy.\n"
+                            f"Time: {save_time}",
+                            parent=editor_win
+                        )
+                        # Auto-copy path to clipboard
+                        editor_win.clipboard_clear()
+                        editor_win.clipboard_append(full_path)
+                        editor_win.update()
+                        status_var.set(f"Saved • Path copied to clipboard • {save_time}")
+                    else:
+                        messagebox.showinfo("Success ✓", 
+                            f"Saved & reloaded!\n\nLocation:\n{full_path}\n\nTime: {save_time}")
+                except:
+                    messagebox.showinfo("Success ✓", 
+                        f"Saved & reloaded!\n\nLocation:\n{full_path}\n\nTime: {save_time}")
+            except Exception as e:
+                status_var.set("Reload failed")
+                messagebox.showerror("Reload Error", 
+                    f"File was saved, but failed to reload rules:\n\n{e}\n\n"
+                    f"Location:\n{TOKEN_REPLACEMENTS_FILE.resolve()}")
+
+        def restore_default():
+            if messagebox.askyesno("Restore Default", "Replace current content with the default token rules?"):
+                default_json = {
+                    "line_patterns": [
+                        {"match": "^[Oo]\\d+.*$", "action": "comment", "prefix": "[", "suffix": "]"},
+                        {"match": "^%.*$", "action": "comment", "prefix": "[", "suffix": "]"}
+                    ],
+                    "token_replacements": {
+                        "M6": "",
+                        "M7": "M11C8 [ ;Coolant On ]",
+                        "M8": "M11C8 [ ;Coolant On ]",
+                        "M9": "M12C8 [ ;Coolant Off ]",
+                        "G17": " [ G17 ;XY Plane Selection ]",
+                        "G40": "[ G40 ;Tool Radius Compensation Off ]",
+                        "G49": "[ G49 ;Tool Length Offset Cancel ]",
+                        "G80": "G80 [ ;Cancel Canned Cycle ]",
+                        "G98": "[ G98 ;Return to Initial Point in Canned Cycle ]",
+                        "(T(?:[7-9]|1[0-6]))": "[\\1]"
+                    }
+                }
+                pretty = json.dumps(default_json, indent=4)
+                text_widget.delete('1.0', 'end')
+                text_widget.insert('1.0', pretty)
+                status_var.set("Default rules loaded • click Save to apply")
+
+        # Auto-save reminder on close
+        def on_close():
+            if text_widget.edit_modified():
+                if messagebox.askyesno("Unsaved Changes", 
+                    "You have unsaved changes in the token rules.\n\nSave before closing?"):
+                    save_and_reload()
+            editor_win.destroy()
+
+        editor_win.protocol("WM_DELETE_WINDOW", on_close)
 
 
 def main() -> None:

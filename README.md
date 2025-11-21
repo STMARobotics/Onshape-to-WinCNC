@@ -148,3 +148,28 @@ On the bottom bar click the `+` button to create a new tab and select `Create CA
    - Click the play button for each toolpath to preview each path individually, or click the play button under each setup to preview all toolpaths at the same time.
    - Check the box next to the toolpath you want to post, then click `Post selected operations` next to the setup for that toolpath.
    - Run the exported file through Onshape-to-WinCNC.pyw
+
+## How to Build the Executable (one-time for developers)
+
+You only need to do this if you want to create or update `Onshape-to-WinCNC.exe`.
+
+### Prerequisites (Windows 10/11)
+
+1. Install **Python 3.10–3.12** (64-bit) from https://www.python.org/downloads/  
+   → During install: check **"Add Python to PATH"**
+
+2. Download or clone this repository
+
+### Build Steps (super simple)
+
+Open **Command Prompt** or **PowerShell** (no admin needed) and run these commands:
+
+```bat
+:: 1. Go to the project folder
+cd path\to\Onshape-to-WinCNC-Converter
+
+:: 2. Install PyInstaller (only needed once)
+pip install --upgrade pyinstaller
+
+:: 3. Build the single-file executable
+pyinstaller --onefile --windowed --icon="app.ico" --add-data "token_replacements.json;." "onshape-to-wincnc.pyw"
