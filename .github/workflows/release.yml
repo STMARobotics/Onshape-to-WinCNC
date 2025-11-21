@@ -1,48 +1,47 @@
-name: Create Release
+name: Build & Release EXE
 
 on:
   push:
     tags:
-      - 'v*'  # Triggers on tags like v1.0.0, v2.1.0 (adjust pattern as needed)
+      - 'v*'           # Triggers on v1.0.0, v2.3.1, etc.
 
 permissions:
-  contents: write  # Required to create releases
+  contents: write    # Needed to create releases and upload assets
 
 jobs:
-  release:
-    runs-on: ubuntu-latest  # Or windows-latest if building Windows artifacts
+  build-and-release:
+    runs-on: windows-latest
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetches full history for changelog generation
+          fetch-depth: 0
 
-      # Optional: Build your project here (e.g., for your Python app)
-      - name: Set up Python  # Example for Python projects
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Install dependencies
+          python-version: '3.11'   # or 3.12
+
+      - name: Install PyInstaller
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-      - name: Build executable  # Customize this step
+
+      - name: Build the executable
         run: |
-          pyinstaller --onefile --windowed --icon="app.ico" --add-data "token_replacements.json:." "onshape-to-wincnc.pyw"
-          # Output: dist/Onshape-to-WinCNC.exe
+          pyinstaller --onefile `
+                      --windowed `
+                      --icon="Onshape-to-WinCNC.ico" `
+                      --add-data "token_replacements.json;." `
+                      --name "Onshape-to-WinCNC" `
+                      "onshape-to-wincnc.pyw"
 
-      - name: Create Release
-        id: release
-        uses: softprops/action-gh-release@v2  # Popular, maintained action
+      - name: Create GitHub Release + upload EXE
+        uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true  # Auto-generates notes from commits/PRs
-          files: |  # Upload assets (e.g., your EXE)
+          generate_release_notes: true
+          files: |
             dist/Onshape-to-WinCNC.exe
-            token_replacements.json  # Or any other files
-          draft: false  # Set to true for draft releases
-          prerelease: false  # Set to true for pre-releases (e.g., beta)
-
-      # Optional: Output release URL for notifications
-      - name: Log Release URL
-        if: steps.release.outputs.release_url != ''
-        run: echo "Release created at ${{ steps.release.outputs.release_url }}"
+            token_replacements.json        # optional – nice for users
+          draft: false
+          prerelease: false
