@@ -11,7 +11,15 @@ WARNING: Use at your own risk. Always simulate before executing toolpaths.
 ---
 
 # What does the script do?
-This script takes G-code exported from Onshape CAM Studio and rewrites it into a format that ShopSabre’s WinCNC controller can safely and reliably run. WinCNC is far more strict than generic Fanuc-style posts, so the script cleans and restructures the file: it removes unsupported tokens (program numbers, comments, redundant modal codes), splits combined commands (like S and M3), forces WinCNC-safe arc formatting, normalizes motion commands, and ensures the correct placement of things like tool-length cancel (G49). It also includes optional removal of mist and tool-change commands via GUI checkboxes. When you leave those options unchecked the converter rewrites `M7/M9` into WinCNC mister commands (`M11C<port>` on / `M12C<port>` off) and keeps `T`/`M6` pairs together in the `TX M6` format WinCNC expects so automated tool changes remain intact. Before converting, the script analyzes Z-values after spindle start to detect if Onshape’s Setup → Position Type or zero plane is wrong—warning for top-of-stock setups that never cut below Z0 and for bottom-of-part setups that dip below Z0. The result is a clean .tap file prefixed with `SS23_` by default (you can change the naming pattern in **Customize → Output Settings…**), ready to run on a ShopSabre without syntax errors, unexpected behavior, or manual editing.
+The converter ingests a .nc program exported from Onshape CAM Studio and rewrites it so ShopSabre’s WinCNC controller accepts it without manual edits. Processing is driven by `token_replacements.json` (editable from the GUI) and applies several WinCNC-safe transforms:
+
+* Comment handling: semicolon comments are stripped; parentheses comments become standalone bracketed lines; top-of-file items like `%` and `O` program numbers are commented out per the JSON `line_patterns` rules.
+* Command normalization: combined spindle speed / start tokens are split (`S####` on its own line followed by `M3`/`M4`/`M5`); lines with multiple G/M words are separated so each line carries only one modal command.
+* Motion safety: the previous motion mode is reinserted when WinCNC requires it (e.g., arcs regain the last `G2/G3` when only IJ/JK/R coordinates are present; linear moves regain `G0/G1` when coordinates appear without a modal motion word).
+* Token rewriting: every token passes through the JSON-driven replacement table—empty replacements delete codes like `M6`, while mappings annotate or translate codes (e.g., `M7/M8/M9` to `M11C8`/`M12C8`, plane selection comments, canned-cycle cancel, tool number bracketing).
+* Post-processing: duplicate or early `G49` lines are dropped until after spindle stop, and two blank lines are enforced after the first `G90` for readability.
+
+Output files receive a bracketed ASCII-art header and are written as `.tap` files. By default the output name is prefixed with `SS23_`, but the **Output Settings…** dialog lets you choose a destination directory and swap between prefix/suffix naming.
 
 ---
 
