@@ -738,7 +738,7 @@ class ConverterGUI:
         style.configure(
             'Link.TButton',
             background=self.palette['card'],
-            foreground=self.palette['accent'],
+            foreground=self.palette['background'],
             bordercolor=self.palette['muted'],
             padding=(8, 4),
             font=('Segoe UI', 10),
