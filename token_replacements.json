@@ -44,7 +44,6 @@
         "G54": "G54 [ ;Work Coordinate System 1 ]",
         "G90": "G90 [ ;Absolute Positioning ]",
         "G91": "G91 [ ;Incremental Positioning ]",
-        "G94": "G94 [ ;Feedrate per Minute ]",
-        "T6": "1"
+        "G94": "G94 [ ;Feedrate per Minute ]"
     }
 }

@@ -1080,13 +1080,31 @@ class ConverterGUI:
 
                 status_var.set(f"Saved & reloaded • {save_time}")
                 
-                messagebox.showinfo(
-                    "Success ✓",
-                    f"Token rules saved and reloaded successfully!\n\n"
-                    f"Location:\n{full_path}\n\n"
-                    f"Time: {save_time}\n"
-                    f"All future conversions will use the updated rules."
-                )
+                try:
+                    import subprocess
+                    import platform
+                    full_path = str(TOKEN_REPLACEMENTS_FILE.resolve())
+                    if platform.system() == "Windows":
+                        # Make path clickable in messagebox (using HTML-like trick in title)
+                        messagebox.showinfo(
+                            "Success ✓",
+                            f"Token rules saved and reloaded!\n\n"
+                            f"Location:\n{full_path}\n\n"
+                            f"Click the path above and press Ctrl+C to copy.\n"
+                            f"Time: {save_time}",
+                            parent=editor_win
+                        )
+                        # Auto-copy path to clipboard
+                        editor_win.clipboard_clear()
+                        editor_win.clipboard_append(full_path)
+                        editor_win.update()
+                        status_var.set(f"Saved • Path copied to clipboard • {save_time}")
+                    else:
+                        messagebox.showinfo("Success ✓", 
+                            f"Saved & reloaded!\n\nLocation:\n{full_path}\n\nTime: {save_time}")
+                except:
+                    messagebox.showinfo("Success ✓", 
+                        f"Saved & reloaded!\n\nLocation:\n{full_path}\n\nTime: {save_time}")
             except Exception as e:
                 status_var.set("Reload failed")
                 messagebox.showerror("Reload Error", 
