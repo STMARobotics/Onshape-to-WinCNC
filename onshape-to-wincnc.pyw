@@ -707,7 +707,7 @@ class ConverterGUI:
         style.configure(
             'Heading.TLabel',
             background=self.palette['card'],
-            foreground=self.palette['accent'],
+            foreground=self.palette['background'],
             font=('Segoe UI Semibold', 11),
         )
         style.configure(
