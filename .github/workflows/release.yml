@@ -1,0 +1,48 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on tags like v1.0.0, v2.1.0 (adjust pattern as needed)
+
+permissions:
+  contents: write  # Required to create releases
+
+jobs:
+  release:
+    runs-on: ubuntu-latest  # Or windows-latest if building Windows artifacts
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetches full history for changelog generation
+
+      # Optional: Build your project here (e.g., for your Python app)
+      - name: Set up Python  # Example for Python projects
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+      - name: Build executable  # Customize this step
+        run: |
+          pyinstaller --onefile --windowed --icon="app.ico" --add-data "token_replacements.json;." "onshape-to-wincnc.pyw"
+          # Output: dist/Onshape-to-WinCNC.exe
+
+      - name: Create Release
+        id: release
+        uses: softprops/action-gh-release@v2  # Popular, maintained action
+        with:
+          generate_release_notes: true  # Auto-generates notes from commits/PRs
+          files: |  # Upload assets (e.g., your EXE)
+            dist/Onshape-to-WinCNC.exe
+            token_replacements.json  # Or any other files
+          draft: false  # Set to true for draft releases
+          prerelease: false  # Set to true for pre-releases (e.g., beta)
+
+      # Optional: Output release URL for notifications
+      - name: Log Release URL
+        if: steps.release.outputs.release_url != ''
+        run: echo "Release created at ${{ steps.release.outputs.release_url }}"
