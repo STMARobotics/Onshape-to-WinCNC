@@ -696,6 +696,12 @@ class ConverterGUI:
             command=self.open_token_rules_editor,
         ).grid(row=4, column=0, columnspan=3, sticky='w', pady=(8, 0))
 
+        ttk.Button(
+            file_card,
+            text='Simple Editor…',
+            command=self.open_simple_editor,
+        ).grid(row=5, column=0, columnspan=3, sticky='w', pady=(8, 0))
+
         # Actions and status
         action_frame = ttk.Frame(self.main_frame, style='TFrame', padding=(0, 15, 0, 0))
         action_frame.grid(row=3, column=0, sticky='ew')
@@ -1139,12 +1145,224 @@ class ConverterGUI:
         # Auto-save reminder on close
         def on_close():
             if text_widget.edit_modified():
-                if messagebox.askyesno("Unsaved Changes", 
+                if messagebox.askyesno("Unsaved Changes",
                     "You have unsaved changes in the token rules.\n\nSave before closing?"):
                     save_and_reload()
             editor_win.destroy()
 
         editor_win.protocol("WM_DELETE_WINDOW", on_close)
+
+    @staticmethod
+    def _split_replacement_text(replacement: str) -> tuple[str, str]:
+        """Break a replacement string into its base value and trailing comment."""
+        if not replacement:
+            return "", ""
+        comment_match = re.search(r";\s*(.*?)\s*\]", replacement)
+        comment = comment_match.group(1) if comment_match else ""
+        base = replacement
+        if "[" in replacement:
+            base = replacement.split("[", 1)[0].strip()
+        base = base.strip()
+        if not base and replacement.startswith("["):
+            stripped = replacement.strip("[] ")
+            base = stripped.split(";")[0].strip()
+        return base, comment
+
+    def open_simple_editor(self) -> None:
+        """Open a guided editor for common KEEP/REMOVE/REPLACE actions."""
+        if not TOKEN_REPLACEMENTS_FILE.exists():
+            messagebox.showerror("File Not Found", f"Cannot find token rules file:\n{TOKEN_REPLACEMENTS_FILE}")
+            return
+
+        try:
+            file_data = json.loads(TOKEN_REPLACEMENTS_FILE.read_text(encoding="utf-8"))
+        except Exception as exc:
+            messagebox.showerror("Load Failed", f"Unable to read token file:\n{exc}")
+            return
+
+        line_patterns = file_data.get("line_patterns", [])
+        token_rules = file_data.get("token_replacements", {}) or {}
+
+        entries: list[dict[str, Any]] = []
+        pending_meta: list[tuple[str, str]] = []
+        trailing_meta: list[tuple[str, str]] = []
+
+        for key, value in token_rules.items():
+            if key.startswith("_"):
+                pending_meta.append((key, value))
+                continue
+            replacement = "" if value is None else str(value)
+            base, comment = self._split_replacement_text(replacement)
+            if not comment and pending_meta:
+                # Use adjacent metadata comment if present
+                comment = str(pending_meta[-1][1])
+            entries.append({
+                "code": key,
+                "replacement": replacement,
+                "base": base,
+                "comment": comment,
+                "metadata": pending_meta,
+            })
+            pending_meta = []
+
+        if pending_meta:
+            trailing_meta = pending_meta
+
+        editor = tk.Toplevel(self.root)
+        editor.title("Simple Token Editor")
+        editor.geometry("720x640")
+        editor.transient(self.root)
+        editor.grab_set()
+        editor.focus_set()
+
+        container = ttk.Frame(editor, padding=15)
+        container.grid(row=0, column=0, sticky="nsew")
+        editor.rowconfigure(0, weight=1)
+        editor.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            container,
+            text="Set how each code should be handled. KEEP leaves the code untouched, REMOVE deletes it, and REPLACE writes new text.",
+            wraplength=660,
+            style='Body.TLabel'
+        ).grid(row=0, column=0, sticky='w', pady=(0, 10))
+
+        canvas = tk.Canvas(container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        list_frame = ttk.Frame(canvas)
+
+        list_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=list_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set, width=680)
+
+        canvas.grid(row=1, column=0, sticky="nsew")
+        scrollbar.grid(row=1, column=1, sticky="ns")
+        container.rowconfigure(1, weight=1)
+        container.columnconfigure(0, weight=1)
+
+        rows: list[dict[str, Any]] = []
+
+        def _toggle_replacement(row_data: dict[str, Any]) -> None:
+            if row_data["action_var"].get() == "REPLACE":
+                row_data["replacement_frame"].grid()
+            else:
+                row_data["replacement_frame"].grid_remove()
+
+        for idx, entry in enumerate(entries):
+            row = ttk.Frame(list_frame, padding=(0, 6))
+            row.grid(row=idx, column=0, sticky="ew")
+            row.columnconfigure(3, weight=1)
+
+            ttk.Label(row, text=entry["code"], width=12, style='Card.TLabel').grid(row=0, column=0, sticky='w')
+
+            action_default = "REMOVE" if entry["replacement"] == "" else "REPLACE"
+            action_var = tk.StringVar(value=action_default)
+            action_box = ttk.Combobox(
+                row,
+                textvariable=action_var,
+                values=["KEEP", "REMOVE", "REPLACE"],
+                state='readonly',
+                width=10,
+            )
+            action_box.grid(row=0, column=1, padx=(8, 8))
+
+            comment_var = tk.StringVar(value=entry["comment"])
+            comment_entry = ttk.Entry(row, textvariable=comment_var, width=28)
+            comment_entry.grid(row=0, column=2, padx=(0, 8), sticky='ew')
+
+            replacement_frame = ttk.Frame(row)
+            replacement_frame.grid(row=0, column=3, sticky='ew')
+            replacement_frame.columnconfigure(0, weight=1)
+            replacement_var = tk.StringVar(value=entry["base"])
+            ttk.Entry(
+                replacement_frame,
+                textvariable=replacement_var,
+            ).grid(row=0, column=0, sticky='ew')
+
+            row_data = {
+                "code": entry["code"],
+                "action_var": action_var,
+                "comment_var": comment_var,
+                "replacement_var": replacement_var,
+                "replacement_frame": replacement_frame,
+                "metadata": entry["metadata"],
+            }
+            action_var.trace_add("write", lambda *_args, rd=row_data: _toggle_replacement(rd))
+            _toggle_replacement(row_data)
+            rows.append(row_data)
+
+        def _build_replacement_text(base: str, comment: str) -> str:
+            clean_base = base.strip()
+            clean_comment = comment.strip()
+            if not clean_comment:
+                return clean_base
+            if "[" in clean_base and ";" in clean_base:
+                return clean_base
+            return f"{clean_base} [ ;{clean_comment} ]".strip()
+
+        def _update_json():
+            new_tokens: dict[str, str] = {}
+            changes: list[str] = []
+
+            for row_data in rows:
+                action = row_data["action_var"].get()
+                code = row_data["code"]
+                comment_text = row_data["comment_var"].get().strip()
+                replacement_value = row_data["replacement_var"].get().strip()
+
+                if action == "KEEP":
+                    continue
+
+                for meta_key, meta_val in row_data.get("metadata", []):
+                    new_tokens[meta_key] = meta_val
+
+                if action == "REMOVE":
+                    new_tokens[code] = ""
+                    changes.append(f"{code}: removed")
+                    continue
+
+                if not replacement_value:
+                    messagebox.showerror("Missing Replacement", f"Please provide a replacement value for {code}.")
+                    return
+
+                replacement_text = _build_replacement_text(replacement_value, comment_text)
+                new_tokens[code] = replacement_text
+                changes.append(f"{code}: replaced → {replacement_text}")
+
+            for meta_key, meta_val in trailing_meta:
+                new_tokens[meta_key] = meta_val
+
+            updated = {
+                "line_patterns": line_patterns,
+                "token_replacements": new_tokens,
+            }
+
+            try:
+                TOKEN_REPLACEMENTS_FILE.write_text(json.dumps(updated, indent=4, ensure_ascii=False) + "\n", encoding="utf-8")
+                load_token_replacement_rules()
+            except Exception as exc:
+                messagebox.showerror("Save Failed", f"Could not update token file:\n{exc}")
+                return
+
+            change_count = len(changes)
+            summary_lines = [f"Codes changed: {change_count}"]
+            if changes:
+                summary_lines.append("\n".join(changes))
+            else:
+                summary_lines.append("No changes were made. All codes remain untouched.")
+
+            messagebox.showinfo("Update Complete", "\n".join(summary_lines))
+
+        ttk.Button(
+            container,
+            text="Update token_replacements.json",
+            style='Accent.TButton',
+            command=_update_json,
+        ).grid(row=2, column=0, pady=(12, 0), sticky='ew')
 
 
 def main() -> None:
