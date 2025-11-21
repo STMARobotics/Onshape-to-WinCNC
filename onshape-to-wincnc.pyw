@@ -109,32 +109,32 @@ def ensure_token_file_exists():
 TOKEN_REPLACEMENTS_FILE = ensure_token_file_exists()
 
 
-BOILERPLATE_REPO_URL = "https://github.com/FRC7028/Onshape-to-WinCNC"
+BOILERPLATE_REPO_URL = "https://github.com/STMARobotics/Onshape-to-WinCNC"
 
 
 def build_boilerplate_header() -> list[str]:
     """Return a list of bracketed boilerplate comment lines for output files."""
 
     title_art = [
-        "  ___  _   _ ____  _   _    _    ____  _____   _____ ___",
-        " / _ \\| \\ | / ___|| | | |  / \\  |  _ \\| ____| |_   _/ _ \\",
-        "| | | |  \\| \\___ \\| |_| | / _ \\ | |_) |  _|     | || | | |",
-        "| |_| | |\\  |___) |  _  |/ ___ \\|  __/| |___    | || |_| |",
-        " \\___/|_| \\_|____/|_| |_/_/   \\_\\_|   |_____|   |_| \\___/",
-        "",
-        "__        _____ _   _  ____ _   _  ____",
-        "\\ \\      / /_ _| \\ | |/ ___| \\ | |/ ___|",
-        " \\ \\ /\\ / / | ||  \\| | |   |  \\| | |",
-        "  \\ V  V /  | || |\\  | |___| |\\  | |___",
-        "   \\_/\\_/  |___|_| \\_|\\____|_| \\_|\\____|",
+        "    ___  _   _ ____  _   _    _    ____  _____   _____ ___    ",
+        "   / _ \\| \\ | / ___|| | | |  / \\  |  _ \\| ____| |_   _/ _ \\   ",
+        "  | | | |  \\| \\___ \\| |_| | / _ \\ | |_) |  _|     | || | | |  ",
+        "  | |_| | |\\  |___) |  _  |/ ___ \\|  __/| |___    | || |_| |  ",
+        "   \\___/|_| \\_|____/|_| |_/_/   \\_\\_|   |_____|   |_| \\___/   ",
+        "                                                              ",
+        "           __        _____ _   _  ____ _   _  ____            ",
+        "           \\ \\      / /_ _| \\ | |/ ___| \\ | |/ ___|           ",
+        "            \\ \\ /\\ / / | ||  \\| | |   |  \\| | |               ",
+        "             \\ V  V /  | || |\\  | |___| |\\  | |___            ",
+        "              \\_/\\_/  |___|_| \\_|\\____|_| \\_|\\____|           ",
     ]
 
     team_art = [
-        " _____ ___ ____  ___    _  _    __    ___ _____",
-        "|___  / _ \\___ \\( _ )  | || |  / /_  / _ \\___  |",
-        "   / / | | |__) / _ \\  | || |_| '_ \\| | | | / /",
-        "  / /| |_| / __/ (_) | |__   _| (_) | |_| |/ /",
-        " /_/  \\___/_____\\___/     |_|  \\___/ \\___//_/",
+        "        _____ ___ ____  ___    _  _    __    ___ _____        ",
+        "       |___  / _ \\___ \\( _ )  | || |  / /_  / _ \\___  |       ",
+        "          / / | | |__) / _ \\  | || |_| '_ \\| | | | / /        ",
+        "         / /| |_| / __/ (_) | |__   _| (_) | |_| |/ /         ",
+        "        /_/  \\___/_____\\___/     |_|  \\___/ \\___//_/          ",
     ]
 
     info_lines = [
@@ -146,9 +146,9 @@ def build_boilerplate_header() -> list[str]:
         return f"[{line}]" if line else "[]"
 
     boilerplate = [bracket(line) for line in title_art]
-    boilerplate.append("[]")
+    boilerplate.append("[                                                              ]")
     boilerplate.extend(bracket(line) for line in team_art)
-    boilerplate.append("[]")
+    boilerplate.append("[                                                              ]")
     boilerplate.extend(bracket(line) for line in info_lines)
     boilerplate.append("")
     return boilerplate
@@ -667,7 +667,7 @@ class ConverterGUI:
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title('CNC Converter')
+        self.root.title('Onshape to WinCNC Converter')
         self.palette = {
             'primary': '#001489',
             'accent': '#ffd400',
@@ -761,6 +761,7 @@ class ConverterGUI:
             "You must select \"3-Axis Generic Milling - Fanuc\" as the Machine in Onshape CAM Studio"
         )
       
+      
         
         info_card = ttk.Frame(self.main_frame, style='Card.TFrame', padding=15)
         info_card.grid(row=0, column=0, sticky='ew')
@@ -812,6 +813,10 @@ class ConverterGUI:
         action_frame.grid(row=3, column=0, sticky='ew')
         action_frame.columnconfigure(0, weight=1)
 
+        button_frame = ttk.Frame(self.main_frame)
+        button_frame.grid(row=5, column=0, columnspan=3, pady=(30, 10), sticky='ew')
+        button_frame.columnconfigure(0, weight=1)
+
         self.convert_button = ttk.Button(
             action_frame,
             text='Convert File',
@@ -819,6 +824,14 @@ class ConverterGUI:
             command=self.convert
         )
         self.convert_button.grid(row=0, column=0, pady=(0, 10))
+
+        # About button – lower right corner
+        ttk.Button(
+            button_frame,
+            text='About',
+            command=self.show_about,
+            width=12
+        ).grid(row=0, column=1, sticky='e')
 
         self.status_var = tk.StringVar()
         self.status_var.set('Select a file to convert.')
@@ -1256,6 +1269,33 @@ class ConverterGUI:
             editor_win.destroy()
 
         editor_win.protocol("WM_DELETE_WINDOW", on_close)
+
+    def show_about(self) -> None:
+        """Display an About dialog with app info and repository link."""
+        about_text = (
+            "Onshape to WinCNC Converter\n\n"
+            "Converts G-code from Onshape CAM Studio into a format compatible with\n"
+            "WinCNC controllers used on ShopSabre routers (especially for FRC teams).\n\n"
+            "Features:\n"
+            "• Smart comment conversion and cleanup\n"
+            "• Customizable output naming and token rules\n\n"
+            "Developed by FRC 7028 Binary Battalion\n"
+            "in collaboration with FRC 4607 CIS\n\n"
+            f"GitHub Repository:\n{BOILERPLATE_REPO_URL}"
+        )
+
+        messagebox.showinfo(
+            title="About Onshape to WinCNC Converter",
+            message=about_text,
+            parent=self.root
+        )
+
+        # Optional: Try to open the repo in browser when user closes the dialog
+        try:
+            import webbrowser
+            #webbrowser.open(BOILERPLATE_REPO_URL)
+        except:
+            pass  # Fail silently if browser can't open
 
 
 def main() -> None:
