@@ -675,6 +675,7 @@ class ConverterGUI:
             'background': '#001489',
             'card': '#ffffff',
             'border': '#ffd400',
+            'muted': '#cbd5e1',
             'text': '#0f172a',
             'muted_text': '#4b5563',
             'on_primary_text': '#ffffff',
