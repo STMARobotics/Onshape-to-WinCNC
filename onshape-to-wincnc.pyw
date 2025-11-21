@@ -109,6 +109,51 @@ def ensure_token_file_exists():
 TOKEN_REPLACEMENTS_FILE = ensure_token_file_exists()
 
 
+BOILERPLATE_REPO_URL = "https://github.com/FRC7028/Onshape-to-WinCNC"
+
+
+def build_boilerplate_header() -> list[str]:
+    """Return a list of bracketed boilerplate comment lines for output files."""
+
+    title_art = [
+        "  ___  _   _ ____  _   _    _    ____  _____   _____ ___",
+        " / _ \\| \\ | / ___|| | | |  / \\  |  _ \\| ____| |_   _/ _ \\",
+        "| | | |  \\| \\___ \\| |_| | / _ \\ | |_) |  _|     | || | | |",
+        "| |_| | |\\  |___) |  _  |/ ___ \\|  __/| |___    | || |_| |",
+        " \\___/|_| \\_|____/|_| |_/_/   \\_\\_|   |_____|   |_| \\___/",
+        "",
+        "__        _____ _   _  ____ _   _  ____",
+        "\\ \\      / /_ _| \\ | |/ ___| \\ | |/ ___|",
+        " \\ \\ /\\ / / | ||  \\| | |   |  \\| | |",
+        "  \\ V  V /  | || |\\  | |___| |\\  | |___",
+        "   \\_/\\_/  |___|_| \\_|\\____|_| \\_|\\____|",
+    ]
+
+    team_art = [
+        " _____ ___ ____  ___    _  _    __    ___ _____",
+        "|___  / _ \\___ \\( _ )  | || |  / /_  / _ \\___  |",
+        "   / / | | |__) / _ \\  | || |_| '_ \\| | | | / /",
+        "  / /| |_| / __/ (_) | |__   _| (_) | |_| |/ /",
+        " /_/  \\___/_____\\___/     |_|  \\___/ \\___//_/",
+    ]
+
+    info_lines = [
+        "Developed by FRC 7028 Binary Battalion in collaboration with FRC 4607 CIS",
+        BOILERPLATE_REPO_URL,
+    ]
+
+    def bracket(line: str) -> str:
+        return f"[{line}]" if line else "[]"
+
+    boilerplate = [bracket(line) for line in title_art]
+    boilerplate.append("[]")
+    boilerplate.extend(bracket(line) for line in team_art)
+    boilerplate.append("[]")
+    boilerplate.extend(bracket(line) for line in info_lines)
+    boilerplate.append("")
+    return boilerplate
+
+
 
 # Cache the rules at startup
 _LINE_RULES: List[dict] = []        # Full line processing rules
@@ -609,7 +654,10 @@ def convert_file(
     converted = convert_lines(
         lines
     )
+    boilerplate = build_boilerplate_header()
     with open(output_path, 'w', encoding='utf-8') as f_out:
+        for cl in boilerplate:
+            f_out.write(cl.rstrip() + '\n')
         for cl in converted:
             f_out.write(cl.rstrip() + '\n')
 
