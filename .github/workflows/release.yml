@@ -28,7 +28,7 @@ jobs:
           pip install pyinstaller
       - name: Build executable  # Customize this step
         run: |
-          pyinstaller --onefile --windowed --icon="app.ico" --add-data "token_replacements.json;." "onshape-to-wincnc.pyw"
+          pyinstaller --onefile --windowed --icon="app.ico" --add-data "token_replacements.json:." "onshape-to-wincnc.pyw"
           # Output: dist/Onshape-to-WinCNC.exe
 
       - name: Create Release
