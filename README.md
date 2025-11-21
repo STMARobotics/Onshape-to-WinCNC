@@ -2,7 +2,7 @@
 ---
 A simple python script to convert Onshape CAM Studio .nc files to be compatible with ShopSabre WinCNC.
 
-Brought to you by FRC 7028 Binary Battalion.
+Brought to you by FRC 7028 Binary Battalion in collaboration with FRC 4607 CIS.
 
 Python is required to run the program—you can install it via the Microsoft Store.
 
