@@ -684,6 +684,7 @@ class ConverterGUI:
         self.root.configure(bg=self.palette['background'])
         self.settings = SETTINGS
         self.output_settings_window: Optional[tk.Toplevel] = None
+        self.selected_input_paths: list[str] = []
 
         style = ttk.Style()
         try:
@@ -804,20 +805,20 @@ class ConverterGUI:
         file_card.grid(row=1, column=0, pady=15, sticky='ew')
         file_card.columnconfigure(1, weight=1)
 
-        ttk.Label(file_card, text='Input G-code file', style='Heading.TLabel').grid(
+        ttk.Label(file_card, text='Input G-code files', style='Heading.TLabel').grid(
             row=0, column=0, columnspan=3, sticky='w', pady=(0, 10)
         )
-        ttk.Label(file_card, text='Location', style='Card.TLabel').grid(row=1, column=0, sticky='w')
+        ttk.Label(file_card, text='Locations', style='Card.TLabel').grid(row=1, column=0, sticky='w')
         self.input_entry = ttk.Entry(file_card)
         self.input_entry.grid(row=1, column=1, padx=10, sticky='ew')
-        ttk.Button(file_card, text='Browse…', command=self.select_input).grid(row=1, column=2)
+        ttk.Button(file_card, text='Browse…', command=self.select_input_files).grid(row=1, column=2)
 
-        ttk.Label(file_card, text='Output file name', style='Card.TLabel').grid(
+        ttk.Label(file_card, text='Output preview', style='Card.TLabel').grid(
             row=2, column=0, sticky='w', pady=(12, 0)
         )
-        self.output_entry = ttk.Entry(file_card)
+        self.output_entry = tk.Text(file_card, height=5, width=60, wrap='none')
         self.output_entry.grid(row=2, column=1, padx=10, pady=(12, 0), sticky='ew')
-        self.output_entry.configure(state='readonly')
+        self.output_entry.configure(state='disabled')
 
         ttk.Button(
             file_card,
@@ -845,32 +846,44 @@ class ConverterGUI:
         self.convert_button.grid(row=0, column=0, pady=(0, 10))
 
         self.status_var = tk.StringVar()
-        self.status_var.set('Select a file to convert.')
+        self.status_var.set('Select one or more files to convert.')
         self.status_label = ttk.Label(action_frame, textvariable=self.status_var, style='Status.TLabel', wraplength=560)
         self.status_label.grid(row=1, column=0, sticky='w')
 
-    def select_input(self) -> None:
-        """Handle the file selection dialog for the input file."""
-        path = filedialog.askopenfilename(
-            title='Select Onshape G-code file',
+    def select_input_files(self) -> None:
+        """Handle selecting one or more input files for conversion."""
+        paths = filedialog.askopenfilenames(
+            title='Select Onshape G-code file(s)',
             filetypes=[
                 ('G-code Files', '*.nc *.tap *.gcode *.txt'),
                 ('All Files', '*.*')
             ]
         )
-        if not path:
+        if not paths:
             return
+        normalized_paths = [os.path.abspath(path) for path in paths]
+        self.selected_input_paths = normalized_paths
+        self._set_input_entry(normalized_paths)
+        self._update_output_entry_for_selected_inputs()
+        self.status_var.set(f'Ready to convert {len(normalized_paths)} file(s).')
+
+    def _set_input_entry(self, input_paths: list[str]) -> None:
+        if not input_paths:
+            self.input_entry.delete(0, tk.END)
+            return
+        first_path = input_paths[0]
+        if len(input_paths) == 1:
+            display_value = first_path
+        else:
+            display_value = f"{first_path} (+{len(input_paths) - 1} more)"
         self.input_entry.delete(0, tk.END)
-        self.input_entry.insert(0, path)
-        out_path = self._derive_output_path(path)
-        self._set_output_entry(out_path)
-        self.status_var.set('Ready to convert.')
+        self.input_entry.insert(0, display_value)
 
     def _set_output_entry(self, value: str) -> None:
         self.output_entry.configure(state='normal')
-        self.output_entry.delete(0, tk.END)
-        self.output_entry.insert(0, value)
-        self.output_entry.configure(state='readonly')
+        self.output_entry.delete('1.0', tk.END)
+        self.output_entry.insert('1.0', value)
+        self.output_entry.configure(state='disabled')
 
     def _derive_output_path(self, input_path: str) -> str:
         directory = self.settings.output_directory or os.path.dirname(input_path)
@@ -885,38 +898,46 @@ class ConverterGUI:
             file_name = f"{value}{name_root}{ext}"
         return os.path.join(directory, file_name)
 
-    def _update_output_entry_for_current_input(self) -> None:
-        input_path = self.input_entry.get().strip()
-        if not input_path:
+    def _update_output_entry_for_selected_inputs(self) -> None:
+        if not self.selected_input_paths:
             return
-        derived = self._derive_output_path(input_path)
-        self._set_output_entry(derived)
+        derived_paths = [self._derive_output_path(input_path) for input_path in self.selected_input_paths]
+        preview_text = "\n".join(derived_paths)
+        self._set_output_entry(preview_text)
 
     def convert(self) -> None:
         """Perform the conversion when the Convert button is clicked."""
-        input_path = self.input_entry.get().strip()
-        output_path = self.output_entry.get().strip()
-
-        if not input_path:
-            messagebox.showerror('Error', 'No input file selected.')
+        if not self.selected_input_paths:
+            messagebox.showerror('Error', 'No input files selected.')
             return
-        if not os.path.isfile(input_path):
-            messagebox.showerror('Error', 'Input file does not exist.')
+        invalid_paths = [path for path in self.selected_input_paths if not os.path.isfile(path)]
+        if invalid_paths:
+            messagebox.showerror(
+                'Error',
+                f'One or more input files do not exist:\n{invalid_paths[0]}'
+            )
             return
         try:
-            self.status_var.set('Checking file...')
+            self.status_var.set('Checking files...')
             self.root.update_idletasks()
 
-            # If no issue detected, perform conversion
-            self.status_var.set('Converting...')
-            self.root.update_idletasks()
-            convert_file(
-                input_path,
-                output_path,
-            )
+            converted_outputs: list[str] = []
+            total = len(self.selected_input_paths)
+            for index, input_path in enumerate(self.selected_input_paths, start=1):
+                output_path = self._derive_output_path(input_path)
+                self.status_var.set(f'Converting file {index}/{total}...')
+                self.root.update_idletasks()
+                convert_file(input_path, output_path)
+                converted_outputs.append(output_path)
 
-            self.status_var.set(f'Conversion complete: {output_path}')
-            messagebox.showinfo('Conversion Complete', f'Converted file saved to:\n{output_path}')
+            self._set_output_entry("\n".join(converted_outputs))
+            self.status_var.set(f'Conversion complete: {len(converted_outputs)} file(s) converted.')
+            preview_count = 10
+            summary_lines = converted_outputs[:preview_count]
+            extra_count = max(0, len(converted_outputs) - preview_count)
+            if extra_count > 0:
+                summary_lines.append(f"...and {extra_count} more.")
+            messagebox.showinfo('Conversion Complete', f'Converted files saved to:\n' + '\n'.join(summary_lines))
         except Exception as e:
             self.status_var.set('Conversion failed.')
             messagebox.showerror('Error', f'An error occurred during conversion:\n{e}')
@@ -1032,7 +1053,7 @@ class ConverterGUI:
             messagebox.showerror('Save Failed', f'Unable to save settings:\n{exc}')
             return
 
-        self._update_output_entry_for_current_input()
+        self._update_output_entry_for_selected_inputs()
         messagebox.showinfo('Settings Saved', 'Output settings saved successfully.')
         self._close_output_settings_window()
 
